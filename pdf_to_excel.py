@@ -99,6 +99,23 @@ def strip_code_fences(text: str) -> str:
     return raw
 
 
+def excel_safe_value(value):
+    """Convert nested JSON values into something openpyxl can store."""
+    if value is None:
+        return ""
+    if isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return json.dumps(value, ensure_ascii=False)
+    if isinstance(value, list):
+        if not value:
+            return ""
+        if all(isinstance(item, (str, int, float, bool)) or item is None for item in value):
+            return ", ".join("" if item is None else str(item) for item in value)
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
+
+
 def extract_data_with_openrouter(pdf_bytes: bytes) -> dict:
     pdf_text = extract_text_from_pdf(pdf_bytes)
     if not pdf_text.strip():
@@ -214,7 +231,7 @@ def build_excel(extracted: dict) -> bytes:
             for i, record in enumerate(section_data):
                 bg = make_fill(C_LIGHT_BLUE if i % 2 == 0 else C_WHITE)
                 for col_num, header in enumerate(headers, start=1):
-                    cell = ws.cell(row=row, column=col_num, value=record.get(header, ""))
+                    cell = ws.cell(row=row, column=col_num, value=excel_safe_value(record.get(header, "")))
                     cell.font = f_val()
                     cell.fill = bg
                     cell.alignment = AL_LEFT
@@ -232,7 +249,7 @@ def build_excel(extracted: dict) -> bytes:
             row += 1
 
             for col_num, header in enumerate(headers, start=1):
-                cell = ws.cell(row=row, column=col_num, value=str(section_data[header]))
+                cell = ws.cell(row=row, column=col_num, value=excel_safe_value(section_data[header]))
                 cell.font = f_val()
                 cell.fill = make_fill(C_WHITE)
                 cell.alignment = AL_LEFT_TOP
@@ -241,7 +258,7 @@ def build_excel(extracted: dict) -> bytes:
 
         elif isinstance(section_data, list):
             for item in section_data:
-                cell = ws.cell(row=row, column=1, value=str(item))
+                cell = ws.cell(row=row, column=1, value=excel_safe_value(item))
                 cell.font = f_bullet()
                 cell.fill = make_fill(C_WHITE)
                 cell.alignment = AL_LEFT_TOP
@@ -249,7 +266,7 @@ def build_excel(extracted: dict) -> bytes:
                 row += 1
 
         else:
-            cell = ws.cell(row=row, column=1, value=str(section_data))
+            cell = ws.cell(row=row, column=1, value=excel_safe_value(section_data))
             cell.font = f_val()
             cell.alignment = AL_LEFT_TOP
             row += 1
