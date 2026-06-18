@@ -235,6 +235,12 @@ def pretty_header_name(name: str) -> str:
     return name.replace("_", " ").strip()
 
 
+def sanitize_filename_fragment(name: str) -> str:
+    cleaned = re.sub(r"[<>:\"/\\|?*\x00-\x1f]", " ", name).strip()
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned or "section"
+
+
 def sanitize_sheet_title(name: str) -> str:
     cleaned = re.sub(r"[\[\]\:\*\?\/\\]", " ", name).strip()
     cleaned = re.sub(r"\s+", " ", cleaned)
