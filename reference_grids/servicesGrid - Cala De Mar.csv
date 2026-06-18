@@ -1,0 +1,26 @@
+SupplierID,SupplierName,Service ID,Service Type,Service Status,Description,Location Code,Itin Description,From Date,To Date,Op Days,Vchr Type,Manifest Code,Currency,Block Type,Comm Timing,Block Code,Max Child Age,Destination,To Destination,Contract Thru,Vchr Notes,Duration,Min Dur,Max Dur,Per Room Price,Per Duration,First Nt Rate,Per 24 Hrs,Desig1,Mask1,Ix1,Desig2,Mask2,Ix2,Desig3,Mask3,Ix3,Desig4,Mask4,Ix4,Desig5,Mask5,Ix5,Desig6,Mask6,Ix6,Desig7,Mask7,Ix7,Desig8,Mask8,Ix8,Divisible,WhoStamp,DateStamp
+"MX-WM-ZIH-CALIXT","Cala de Mar Resort and Spa Ixtapa","ID-FIT-COF-STD","HTL","LOADING","Cliffside Ocean Front - Standard Rate","","<ul><b>Inclusions:</b> <li>Welcome Amenity, Minibar, Coffee Machine, Tea Bags and Bath Amenities</li><li>Daily American Breakfast for Two Until 26 Dec 26</li></ul>","06 Feb 2025","31 Dec 2099","","","","USD","R","O","MX-WM-ZIH-CALIXT-ID-FIT-COF-STD","11","ZIH","","","","0","0","0","Y","N","N","N","One Bedroom","A/AA/AAC","Y","One Bedroom","AAA","Y","","","","","","","","","","","","","","","","","","","N","PradeepPalani","27 Feb 2026 05:14:42 AM"
+"MX-WM-ZIH-CALIXT","Cala de Mar Resort and Spa Ixtapa","ID-FIT-FAMA-STD","HTL","LOADING","Family Adjoining - Standard Rate","","<ul><b>Inclusions:</b> <li>Welcome Amenity, Minibar, Coffee Machine, Tea Bags and Bath Amenities</li><li>Daily American Breakfast for Two Until 26 Dec 26</li></ul>","06 Feb 2025","31 Dec 2099","","","","USD","R","O","MX-WM-ZIH-CALIXT-ID-FIT-FAMA-STD","11","ZIH","","","","0","0","0","Y","N","N","N","One Bedroom","A/AA/AAC","Y","One Bedroom","AAA","Y","","","","","","","","","","","","","","","","","","","N","PradeepPalani","27 Feb 2026 05:14:42 AM"
+"MX-WM-ZIH-CALIXT","Cala de Mar Resort and Spa Ixtapa","ID-FIT-MSTPNT-STD","HTL","LOADING","Master Suite Penthouse - Standard Rate","","<ul>
+<li><b>Inclusions:</b></li>
+<li>Welcome Amenity, Minibar, Coffee Machine, Tea Bags and Bath Amenities</li>
+<li>Daily American Breakfast for Two Until 26 Dec 26</li>
+</ul>","06 Feb 2025","31 Dec 2099","","","","USD","R","O","MX-WM-ZIH-CALIXT-ID-FIT-MSTPNT-STD","11","ZIH","","","","0","0","0","Y","N","N","N","One Bedroom","A/AA/AAC","Y","One Bedroom","AAA","Y","","","","","","","","","","","","","","","","","","","N","AarthiKuppusamy","13 May 2026 07:54:28 AM"
+"MX-WM-ZIH-CALIXT","Cala de Mar Resort and Spa Ixtapa","ID-FIT-RMDLXOF-STD","HTL","LOADING","Romance Deluxe Ocean Front - Standard Rate","","<ul>
+<li><b>Inclusions:</b></li>
+<li>Welcome Amenity, Minibar, Coffee Machine, Tea Bags and Bath Amenities</li>
+<li>Daily American Breakfast for Two Until 26 Dec 26</li>
+</ul>","06 Feb 2025","31 Dec 2099","","","","USD","R","O","MX-WM-ZIH-CALIXT-ID-FIT-RMDLXOF-STD","11","ZIH","","","","0","0","0","Y","N","N","N","One Bedroom","A/AA/AAC","Y","One Bedroom","AAA","Y","","","","","","","","","","","","","","","","","","","N","AarthiKuppusamy","13 May 2026 07:54:41 AM"
+"MX-WM-ZIH-CALIXT","Cala de Mar Resort and Spa Ixtapa","LC-PLACEHOLDER","HTL","LOADING","Lc-Placeholder","","<ul><b>Inclusions:</b> <li>Welcome Amenity, Minibar, Coffee Machine, Tea Bags and Bath Amenities</li><li>Daily American Breakfast for Two Until 26 Dec 26</li></ul>","06 Feb 2025","31 Dec 2099","","","","USD","R","O","","11","ZIH","","","","0","0","0","Y","N","N","N","Room","A/AC/ACC/ACCC/ACCCC/ACCCCC/AA/AAC/AACC/AACCC/AACCCC/AAA/AAAC/AAACC/AAACCC/AAACCCC/AAAA/AAAAC/AAAACC/AAAACCC/AAAACCCC/AAAAA/AAAAAC/AAAAACC/AAAAAA/AAAAAAC/AAAAAACC/AAAAAAA/AAAAAAAC/AAAAAAACC/AAAAAAACCC/AAAAAAAA/AAAAAAAAC/AAAAAAAACC/AAAAAAAAA/AAAAAAAAAA","Y","","","","","","","","","","","","","","","","","","","","","","N","PradeepPalani","27 Feb 2026 05:14:42 AM"
+"MX-WM-ZIH-CALIXT","Cala de Mar Resort and Spa Ixtapa","ID-FIT-SERV-PRF","MIS","LOADING","Preferred Amenities","","<br>
+<b>Inclusions:</b>
+<li>USD25 Equivalent Resort Credit to be Utilized During Stay (Not Combinable, Not Valid on Room Rate, No Cash Value if not redeemed in full, Credit Per Room Per Stay)</li>
+<li>Guaranteed Early Check-in / Late Check-out</li>
+<b>TERMS:</b>
+<li>Valid Year-round, Including Festive</li>
+<li>Valid Travel Window: 01 Jan 25 - 31 Mar 2026</li>
+<li>Amenities Apply Only in Bar Rate with a Minimum of 2 Nights</li>
+<li>Not Combinable with Packages and Promotions.</li>
+<li>Valid Based on Date of Check-in</li>
+<br>","01 Jan 2025","31 Mar 2026","","","","USD","","O","","0","ZIH","","","","0","0","0","Y","N","N","N","Service","M1-99","Y","","","","","","","","","","","","","","","","","","","","","","N","SarathkumarVinayagam","16 Jun 2025 05:23:08 PM"
+"MX-WM-ZIH-CALIXT","Cala de Mar Resort and Spa Ixtapa","ID-FIT-MEAL","RST","LOADING","Breakfast Meal Plan","","","01 Mar 2025","02 Jan 2027","","","","USD","R","O","","0","ZIH","","","","0","0","0","N","N","N","N","Adult","M1-99","Y","","","","","","","","","","","","","","","","","","","","","","N","IDValidator","13 May 2026 06:49:40 AM"

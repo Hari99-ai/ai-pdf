@@ -274,7 +274,7 @@ def parse_csv_bytes(csv_bytes: bytes) -> list[dict]:
     return rows
 
 
-REFERENCE_CALA_DE_MAR_DIR = Path(r"D:\all\Cala De Mar")
+REFERENCE_CALA_DE_MAR_DIR = Path(__file__).parent / "reference_grids"
 
 
 def load_csv_rows(path: Path) -> list[dict]:
