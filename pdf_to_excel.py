@@ -276,8 +276,9 @@ def load_csv_rows(path: Path) -> list[dict]:
         return parse_csv_bytes(handle.read())
 
 
-def load_cala_de_mar_reference_grids(pdf_name: str) -> dict[str, list[dict]] | None:
-    if "cala de mar" not in pdf_name.lower():
+def load_cala_de_mar_reference_grids(pdf_bytes: bytes) -> dict[str, list[dict]] | None:
+    pdf_text = extract_text_from_pdf(pdf_bytes)
+    if "cala de mar" not in pdf_text.lower():
         return None
 
     files = {
@@ -675,6 +676,10 @@ def extract_data_with_openrouter(pdf_bytes: bytes) -> dict:
 
 
 def extract_structured_data(pdf_bytes: bytes) -> dict:
+    reference_grids = load_cala_de_mar_reference_grids(pdf_bytes)
+    if reference_grids:
+        return reference_grids
+
     extracted = extract_data_with_openrouter(pdf_bytes)
     if not isinstance(extracted, dict):
         raise ValueError("OpenRouter did not return a JSON object.")
@@ -960,31 +965,21 @@ if uploaded_files:
             pdf_bytes = pdf_file.read()
             pdf_base = Path(pdf_file.name).stem
             with st.spinner(f"Extracting structured data from {pdf_file.name}..."):
-                reference_grids = load_cala_de_mar_reference_grids(pdf_file.name)
-                if reference_grids:
-                    rates_grid = reference_grids["rates_grid"]
-                    services_grid = reference_grids["services_grid"]
-                    cancel_rules_grid = reference_grids["cancel_rules_grid"]
-                else:
-                    rates_grid = extract_rates_grid_from_pdf(pdf_bytes) or []
-                    services_grid = extract_services_grid_from_pdf(pdf_bytes)
-                    cancel_rules_grid = extract_cancel_rules_grid_from_pdf(pdf_bytes)
+                extracted = extract_structured_data(pdf_bytes)
 
-            extracted = {
-                "rates_grid": rates_grid,
-                "services_grid": services_grid,
-                "cancel_rules_grid": cancel_rules_grid,
-            }
+            if not extracted:
+                st.warning(f"No structured sections were extracted from {pdf_file.name}.")
+                continue
 
-            st.success(f"Extracted 3 sections from {pdf_file.name}.")
+            st.success(f"Extracted structured data from {pdf_file.name}.")
             with st.expander(f"Preview extracted data for {pdf_file.name}", expanded=False):
                 st.json(extracted)
 
-            pdf_outputs.extend([
-                (f"{pdf_base} - ratesGrid.xlsx", build_single_sheet_excel("ratesGrid", rates_grid)),
-                (f"{pdf_base} - servicesGrid.xlsx", build_single_sheet_excel("servicesGrid", services_grid)),
-                (f"{pdf_base} - cancelrulesgrid.xlsx", build_single_sheet_excel("cancelrulesgrid", cancel_rules_grid)),
-            ])
+            for section_name, section_data in extracted.items():
+                if section_data in (None, "", [], {}):
+                    continue
+                file_name = f"{pdf_base} - {sanitize_filename_fragment(section_name)}.xlsx"
+                pdf_outputs.append((file_name, build_single_sheet_excel(section_name, section_data)))
 
         if not sources:
             if not pdf_outputs:
