@@ -925,89 +925,94 @@ def build_zip_of_excels(files: list[tuple[str, bytes]]) -> bytes:
     return buffer.getvalue()
 
 
-st.set_page_config(page_title="PDF to Excel Extractor", page_icon="PDF", layout="centered")
-st.title("PDF to Excel Extractor")
-st.markdown("Upload a PDF and extract structured data into a clean Excel file.")
+def main():
+    st.set_page_config(page_title="PDF to Excel Extractor", page_icon="PDF", layout="centered")
+    st.title("PDF to Excel Extractor")
+    st.markdown("Upload a PDF and extract structured data into a clean Excel file.")
 
-with st.sidebar:
-    st.header("How it works")
-    st.markdown("1. Upload a PDF\n2. Click Extract\n3. Download the Excel file")
-    st.markdown("---")
-    st.caption(f"Model: `{OPENROUTER_MODEL}`")
+    with st.sidebar:
+        st.header("How it works")
+        st.markdown("1. Upload a PDF\n2. Click Extract\n3. Download the Excel file")
+        st.markdown("---")
+        st.caption(f"Model: `{OPENROUTER_MODEL}`")
 
-uploaded_files = st.file_uploader("Upload PDFs or CSVs", type=["pdf", "csv"], accept_multiple_files=True)
+    uploaded_files = st.file_uploader("Upload PDFs or CSVs", type=["pdf", "csv"], accept_multiple_files=True)
 
-if not OPENROUTER_API_KEY:
-    st.warning("Add OPENROUTER_API_KEY to your .env file before extracting a PDF.")
+    if not OPENROUTER_API_KEY:
+        st.warning("Add OPENROUTER_API_KEY to your .env file before extracting a PDF.")
 
-if PDF_IMPORT_ERROR:
-    st.error("Missing dependency: pypdf. Install project dependencies with `python -m pip install -r requirements.txt`.")
-    st.stop()
+    if PDF_IMPORT_ERROR:
+        st.error("Missing dependency: pypdf. Install project dependencies with `python -m pip install -r requirements.txt`.")
+        st.stop()
 
-if OPENPYXL_IMPORT_ERROR:
-    st.error("Missing dependency: openpyxl. Install project dependencies with `python -m pip install -r requirements.txt`.")
-    st.stop()
+    if OPENPYXL_IMPORT_ERROR:
+        st.error("Missing dependency: openpyxl. Install project dependencies with `python -m pip install -r requirements.txt`.")
+        st.stop()
 
-if uploaded_files:
-    for uploaded_file in uploaded_files:
-        st.info(f"{uploaded_file.name} - {uploaded_file.size / 1024:.1f} KB")
+    if uploaded_files:
+        for uploaded_file in uploaded_files:
+            st.info(f"{uploaded_file.name} - {uploaded_file.size / 1024:.1f} KB")
 
-    if st.button("Extract and Generate Excel", type="primary", use_container_width=True):
-        pdf_files = [file for file in uploaded_files if file.name.lower().endswith(".pdf")]
-        csv_files = [file for file in uploaded_files if file.name.lower().endswith(".csv")]
+        if st.button("Extract and Generate Excel", type="primary", use_container_width=True):
+            pdf_files = [file for file in uploaded_files if file.name.lower().endswith(".pdf")]
+            csv_files = [file for file in uploaded_files if file.name.lower().endswith(".csv")]
 
-        sources: list[tuple[str, object]] = []
-        pdf_outputs: list[tuple[str, bytes]] = []
+            sources: list[tuple[str, object]] = []
+            pdf_outputs: list[tuple[str, bytes]] = []
 
-        for csv_file in csv_files:
-            try:
-                csv_rows = parse_csv_bytes(csv_file.read())
-            except Exception as exc:
-                st.error(f"Could not parse CSV '{csv_file.name}': {exc}")
-                st.stop()
-            sources.append((Path(csv_file.name).stem, csv_rows))
+            for csv_file in csv_files:
+                try:
+                    csv_rows = parse_csv_bytes(csv_file.read())
+                except Exception as exc:
+                    st.error(f"Could not parse CSV '{csv_file.name}': {exc}")
+                    st.stop()
+                sources.append((Path(csv_file.name).stem, csv_rows))
 
-        for pdf_file in pdf_files:
-            pdf_bytes = pdf_file.read()
-            pdf_base = Path(pdf_file.name).stem
-            with st.spinner(f"Extracting structured data from {pdf_file.name}..."):
-                extracted = extract_structured_data(pdf_bytes)
+            for pdf_file in pdf_files:
+                pdf_bytes = pdf_file.read()
+                pdf_base = Path(pdf_file.name).stem
+                with st.spinner(f"Extracting structured data from {pdf_file.name}..."):
+                    extracted = extract_structured_data(pdf_bytes)
 
-            if not extracted:
-                st.warning(f"No structured sections were extracted from {pdf_file.name}.")
-                continue
-
-            st.success(f"Extracted structured data from {pdf_file.name}.")
-            with st.expander(f"Preview extracted data for {pdf_file.name}", expanded=False):
-                st.json(extracted)
-
-            for section_name, section_data in extracted.items():
-                if section_data in (None, "", [], {}):
+                if not extracted:
+                    st.warning(f"No structured sections were extracted from {pdf_file.name}.")
                     continue
-                file_name = f"{pdf_base} - {sanitize_filename_fragment(section_name)}.xlsx"
-                pdf_outputs.append((file_name, build_single_sheet_excel(section_name, section_data)))
 
-        if not sources:
-            if not pdf_outputs:
-                st.error("Upload at least one PDF or CSV file.")
-                st.stop()
+                st.success(f"Extracted structured data from {pdf_file.name}.")
+                with st.expander(f"Preview extracted data for {pdf_file.name}", expanded=False):
+                    st.json(extracted)
 
-        with st.spinner("Building Excel file..."):
-            if pdf_outputs:
-                excel_bytes = build_zip_of_excels(pdf_outputs)
-                filename = "pdf_structured_extraction.zip"
-            else:
-                excel_bytes = build_excel_from_sources(sources)
-                if len(uploaded_files) == 1:
-                    base = Path(uploaded_files[0].name).stem
-                    filename = f"{base}_extracted.xlsx"
+                for section_name, section_data in extracted.items():
+                    if section_data in (None, "", [], {}):
+                        continue
+                    file_name = f"{pdf_base} - {sanitize_filename_fragment(section_name)}.xlsx"
+                    pdf_outputs.append((file_name, build_single_sheet_excel(section_name, section_data)))
+
+            if not sources:
+                if not pdf_outputs:
+                    st.error("Upload at least one PDF or CSV file.")
+                    st.stop()
+
+            with st.spinner("Building Excel file..."):
+                if pdf_outputs:
+                    excel_bytes = build_zip_of_excels(pdf_outputs)
+                    filename = "pdf_structured_extraction.zip"
                 else:
-                    filename = "combined_extracted.xlsx"
+                    excel_bytes = build_excel_from_sources(sources)
+                    if len(uploaded_files) == 1:
+                        base = Path(uploaded_files[0].name).stem
+                        filename = f"{base}_extracted.xlsx"
+                    else:
+                        filename = "combined_extracted.xlsx"
 
-        st.download_button(
-            label="Download Excel File",
-            data=excel_bytes,
-            file_name=filename,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
-        )
+            st.download_button(
+                label="Download Excel File",
+                data=excel_bytes,
+                file_name=filename,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+
+
+if __name__ == "__main__":
+    main()
