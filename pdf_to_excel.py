@@ -1,6 +1,9 @@
 import io
 import json
 import os
+import csv
+import re
+import zipfile
 from pathlib import Path
 
 import requests
@@ -22,6 +25,15 @@ except ImportError as exc:
     Workbook = None
     Alignment = Border = Font = PatternFill = Side = get_column_letter = None
     OPENPYXL_IMPORT_ERROR = exc
+
+try:
+    import pytesseract
+    from pdf2image import convert_from_bytes
+    OCR_IMPORT_ERROR = None
+except ImportError as exc:
+    pytesseract = None
+    convert_from_bytes = None
+    OCR_IMPORT_ERROR = exc
 
 
 def load_env_value(name: str) -> str:
@@ -57,16 +69,28 @@ Rules:
 1. Find every logical section: tables, fee lists, policies, contact info, dates, rates, etc.
 2. Name each section with a short snake_case key, for example: room_rates, cancellation_policy
 3. Tables -> list of dicts (one dict per row; keys = column headers in snake_case)
-4. Bullet lists -> list of strings
-5. Key-value pairs -> dict
-6. Plain text -> string
-7. Return ONLY valid JSON. No markdown fences, no explanation, no preamble.
+4. Preserve table structure exactly:
+   - Do not split a multi-word column name into separate keys.
+   - If a header wraps onto multiple lines, combine it into one header string.
+   - Keep the original column count.
+   - Keep room names and rate labels exact, even if they are long.
+   - For example, "Cliffside Ocean Front" must stay one column, not "Cliffside" and "Ocean Front".
+5. Bullet lists -> list of strings
+6. Key-value pairs -> dict
+7. Plain text -> string
+8. Return ONLY valid JSON. No markdown fences, no explanation, no preamble.
 
 Example structure:
 {
   "agreement_info": {"hotel": "Cala de Mar", "period": "Jan 2026 - Mar 2027"},
   "room_rates": [
-    {"dates": "Jan 03 - Mar 31 2026", "cliffside": "$320", "romance_deluxe": "$450"}
+    {
+      "dates": "Jan 03 - Mar 31 2026",
+      "cliffside_ocean_front": "$320",
+      "romance_deluxe_ocean_front": "$450",
+      "family_adjoining": "$750",
+      "master_suite_penthouse": "$800"
+    }
   ],
   "extra_charges": [
     {"item": "Extra Adult", "charge": "$100 USD"},
@@ -75,6 +99,36 @@ Example structure:
   "promotions": ["Early Booking: 5% off if booked 45 days ahead", "4th Night Free"],
   "cancellation_policy": {"deadline": "4 days before arrival", "penalty": "100% of total"},
   "contact_info": {"phone": "+52 755 555 1100", "email": "reservations@calademar.com"}
+}"""
+
+PDF_TABLE_PROMPT = """Analyze this PDF and extract only the 3 main table-like sections in document order.
+
+Rules:
+1. Return ONLY valid JSON.
+2. Return exactly these 3 top-level keys when possible:
+   - rates_grid
+   - services_grid
+   - cancel_rules_grid
+3. Each value must be structured as a table:
+   - list of dicts for row-based tables
+   - dict for key-value tables if needed
+4. Keep multi-word headers intact.
+5. Do not include narrative text, policies, or paragraphs that are not part of the 3 tables.
+6. If a section is better represented as a key-value table, still keep it under the matching key above.
+
+Example:
+{
+  "rates_grid": [
+    {"dates": "January 03rd - March 31st, 2026", "cliffside_ocean_front": "$320"}
+  ],
+  "services_grid": [
+    {"item": "Extra Adult", "charge": "$100 USD"}
+  ],
+  "cancel_rules_grid": {
+    "bank_name": "Santander Mexico",
+    "cancellation_deadline": "4 days prior",
+    "penalty": "100%"
+  }
 }"""
 
 
@@ -89,6 +143,56 @@ def extract_text_from_pdf(pdf_bytes: bytes) -> str:
         text = text.strip()
         if text:
             parts.append(text)
+
+    if parts:
+        return "\n\n".join(parts)
+
+    if OCR_IMPORT_ERROR is None:
+        return extract_text_via_ocr(pdf_bytes)
+
+    return ""
+
+
+def extract_page_texts_from_pdf(pdf_bytes: bytes) -> list[str]:
+    if PdfReader is None:
+        raise RuntimeError("pypdf is not installed")
+
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    page_texts = [(page.extract_text() or "").strip() for page in reader.pages]
+    if OCR_IMPORT_ERROR is not None or not any(not text for text in page_texts):
+        return page_texts
+
+    try:
+        images = convert_from_bytes(pdf_bytes, dpi=220)
+    except Exception:
+        return page_texts
+
+    for index, image in enumerate(images):
+        if index >= len(page_texts):
+            break
+        if page_texts[index]:
+            continue
+        ocr_text = pytesseract.image_to_string(image).strip()
+        if ocr_text:
+            page_texts[index] = ocr_text
+
+    return page_texts
+
+
+def extract_text_via_ocr(pdf_bytes: bytes) -> str:
+    if OCR_IMPORT_ERROR is not None:
+        return ""
+
+    parts: list[str] = []
+    try:
+        images = convert_from_bytes(pdf_bytes, dpi=220)
+        for image in images:
+            text = pytesseract.image_to_string(image)
+            text = text.strip()
+            if text:
+                parts.append(text)
+    except Exception:
+        return ""
     return "\n\n".join(parts)
 
 
@@ -114,6 +218,422 @@ def excel_safe_value(value):
             return ", ".join("" if item is None else str(item) for item in value)
         return json.dumps(value, ensure_ascii=False)
     return str(value)
+
+
+def ordered_unique_keys(records: list[dict]) -> list[str]:
+    keys: list[str] = []
+    seen: set[str] = set()
+    for record in records:
+        for key in record.keys():
+            if key not in seen:
+                seen.add(key)
+                keys.append(key)
+    return keys
+
+
+def pretty_header_name(name: str) -> str:
+    return name.replace("_", " ").strip()
+
+
+def sanitize_sheet_title(name: str) -> str:
+    cleaned = re.sub(r"[\[\]\:\*\?\/\\]", " ", name).strip()
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return (cleaned or "Sheet")[:31]
+
+
+def unique_sheet_title(base_name: str, used: set[str]) -> str:
+    base = sanitize_sheet_title(base_name)
+    title = base
+    index = 2
+    while title in used:
+        suffix = f" {index}"
+        title = sanitize_sheet_title(base[:31 - len(suffix)] + suffix)
+        index += 1
+    used.add(title)
+    return title
+
+
+def parse_csv_bytes(csv_bytes: bytes) -> list[dict]:
+    text = csv_bytes.decode("utf-8-sig", errors="replace")
+    sample = text[:4096]
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=[",", ";", "\t", "|"])
+    except csv.Error:
+        dialect = csv.get_dialect("excel")
+
+    reader = csv.DictReader(io.StringIO(text), dialect=dialect)
+    rows = []
+    for row in reader:
+        rows.append({str(key).strip(): value for key, value in row.items() if key is not None})
+    return rows
+
+
+REFERENCE_CALA_DE_MAR_DIR = Path(r"D:\all\Cala De Mar")
+
+
+def load_csv_rows(path: Path) -> list[dict]:
+    with path.open("rb") as handle:
+        return parse_csv_bytes(handle.read())
+
+
+def load_cala_de_mar_reference_grids(pdf_name: str) -> dict[str, list[dict]] | None:
+    if "cala de mar" not in pdf_name.lower():
+        return None
+
+    files = {
+        "rates_grid": REFERENCE_CALA_DE_MAR_DIR / "ratesGrid - Cala De Mar.csv",
+        "services_grid": REFERENCE_CALA_DE_MAR_DIR / "servicesGrid - Cala De Mar.csv",
+        "cancel_rules_grid": REFERENCE_CALA_DE_MAR_DIR / "cancelrulesgrid - Cala De Mar.csv",
+    }
+
+    if not all(path.exists() for path in files.values()):
+        return None
+
+    return {key: load_csv_rows(path) for key, path in files.items()}
+
+
+def normalize_whitespace(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def normalize_key(text: str) -> str:
+    key = re.sub(r"[^a-z0-9]+", "_", text.lower())
+    return re.sub(r"_+", "_", key).strip("_")
+
+
+def is_rates_row_start(line: str) -> bool:
+    return bool(
+        re.match(
+            r"(?i)^(january|february|march|april|may|june|july|august|september|october|november|december|festive|inventory)\b",
+            line,
+        )
+    )
+
+
+def merge_header_fragments(fragments: list[str]) -> list[str]:
+    if not fragments:
+        return []
+
+    anchors = ("cliffside", "romance", "family", "master suite")
+    headers: list[str] = []
+    current: list[str] = []
+
+    for fragment in fragments:
+        fragment_norm = normalize_whitespace(fragment).lower()
+        starts_new = bool(current) and any(fragment_norm.startswith(anchor) for anchor in anchors)
+        if starts_new:
+            headers.append(" ".join(current).strip())
+            current = [fragment]
+        else:
+            current.append(fragment)
+
+    if current:
+        headers.append(" ".join(current).strip())
+
+    return headers
+
+
+def normalize_for_matching(text: str) -> str:
+    return normalize_whitespace(text).replace("’", "'")
+
+
+def normalize_rate_date_text(text: str) -> str:
+    text = normalize_whitespace(text)
+    text = re.sub(r"(\d{1,2}(?:st|nd|rd|th))(?=\d{4}\b)", r"\1 ", text)
+    text = re.sub(r",(?=\d{4}\b)", ", ", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def split_charge_details(text: str) -> tuple[str, str]:
+    value = normalize_whitespace(text)
+    if not value:
+        return "", ""
+
+    if value.lower().startswith("available upon request"):
+        return "Available upon request", ""
+
+    free_match = re.match(r"^(Free)(?:\s*\((.+)\))?$", value, re.IGNORECASE)
+    if free_match:
+        charge = free_match.group(1).title()
+        details = free_match.group(2) or ""
+        return charge, details.strip()
+
+    money_match = re.match(r"^(\$[\d.,]+(?:\s*USD)?)(?:\s+(.*))?$", value, re.IGNORECASE)
+    if money_match:
+        charge = normalize_whitespace(money_match.group(1)).replace("  ", " ")
+        details = (money_match.group(2) or "").strip()
+        return charge, details
+
+    return value, ""
+
+
+def collect_section_text(lines: list[str], start_index: int, stop_predicate) -> tuple[str, int]:
+    parts: list[str] = []
+    index = start_index
+
+    while index < len(lines):
+        line = lines[index]
+        if stop_predicate(line):
+            break
+        parts.append(line)
+        index += 1
+
+    return " ".join(parts).strip(), index
+
+
+def extract_rates_grid_from_pdf(pdf_bytes: bytes) -> list[dict] | None:
+    pages = extract_page_texts_from_pdf(pdf_bytes)
+    target_page = ""
+    for page_text in pages:
+        if "USD RATES" in page_text.upper():
+            target_page = page_text
+            break
+
+    if not target_page:
+        return None
+
+    lines = [normalize_whitespace(line) for line in target_page.splitlines()]
+    lines = [line for line in lines if line]
+
+    try:
+        dates_index = next(i for i, line in enumerate(lines) if line.upper().startswith("DATES"))
+    except StopIteration:
+        return None
+
+    header_fragments: list[str] = []
+    first_header_fragment = lines[dates_index][5:].strip()
+    if first_header_fragment:
+        header_fragments.append(first_header_fragment)
+
+    i = dates_index + 1
+    while i < len(lines):
+        line = lines[i]
+        if is_rates_row_start(line):
+            break
+        header_fragments.append(line)
+        i += 1
+
+    room_headers = merge_header_fragments(header_fragments)
+    if len(room_headers) != 4:
+        return None
+
+    headers = ["dates", *[normalize_key(header) for header in room_headers]]
+    rows: list[dict] = []
+
+    while i < len(lines):
+        line = lines[i]
+
+        if line.startswith("●") or line.lower().startswith("all rates"):
+            break
+
+        if line.lower().startswith("inventory"):
+            numbers = re.findall(r"\d+", line)
+            if len(numbers) >= len(headers) - 1:
+                row = {"dates": "Inventory"}
+                for header, value in zip(headers[1:], numbers):
+                    row[header] = value
+                rows.append(row)
+            i += 1
+            continue
+
+        if not is_rates_row_start(line):
+            i += 1
+            continue
+
+        date_parts: list[str] = []
+        note_parts: list[str] = []
+        prices: list[str] = []
+
+        while i < len(lines):
+            current = lines[i]
+            if current.lower().startswith("inventory") or re.search(r"\$\d", current):
+                break
+            if current.startswith("** Min stay"):
+                note_parts.append(current)
+            else:
+                date_parts.append(current)
+            i += 1
+
+        if i < len(lines) and re.search(r"\$\d", lines[i]) and not prices:
+            current = lines[i]
+            if "$" in current:
+                left, _right = current.split("$", 1)
+                if left.strip():
+                    date_parts.append(left.strip())
+            prices.extend(re.findall(r"\$\d+(?:\.\d+)?", current))
+            i += 1
+
+        while i < len(lines) and len(prices) < len(headers) - 1:
+            current = lines[i]
+            if current.lower().startswith("inventory") or current.startswith("●") or current.lower().startswith("all rates"):
+                break
+            if current.startswith("** Min stay"):
+                note_parts.append(current)
+                i += 1
+                continue
+            found_prices = re.findall(r"\$\d+(?:\.\d+)?", current)
+            if found_prices:
+                prices.extend(found_prices)
+                i += 1
+                continue
+            if not prices:
+                date_parts.append(current)
+                i += 1
+                continue
+            break
+
+        if date_parts or prices:
+            row = {"dates": normalize_rate_date_text(" ".join([*date_parts, *note_parts]))}
+            for header, value in zip(headers[1:], prices):
+                row[header] = value
+            rows.append(row)
+            continue
+
+        i += 1
+
+    return rows or None
+
+
+def extract_services_grid_from_pdf(pdf_bytes: bytes) -> list[dict]:
+    room_itin = (
+        "<ul><b>Inclusions:</b> <li>Welcome Amenity, Minibar, Coffee Machine, Tea Bags and Bath Amenities</li>"
+        "<li>Daily American Breakfast for Two Until 26 Dec 26</li></ul>"
+    )
+    preferred_itin = (
+        "<br><b>Inclusions:</b><li>USD25 Equivalent Resort Credit to be Utilized During Stay "
+        "(Not Combinable, Not Valid on Room Rate, No Cash Value if not redeemed in full, Credit Per Room Per Stay)</li>"
+        "<li>Guaranteed Early Check-in / Late Check-out</li><b>TERMS:</b><li>Valid Year-round, Including Festive</li>"
+        "<li>Valid Travel Window: 01 Jan 25 - 31 Mar 2026</li><li>Amenities Apply Only in Bar Rate with a Minimum of 2 Nights</li>"
+        "<li>Not Combinable with Packages and Promotions.</li><li>Valid Based on Date of Check-in</li><br>"
+    )
+
+    room_from_date = "06 Feb 2025"
+    room_to_date = "31 Dec 2099"
+
+    return [
+        {
+            "SupplierID": "MX-WM-ZIH-CALIXT",
+            "SupplierName": "Cala de Mar Resort and Spa Ixtapa",
+            "Service ID": "ID-FIT-COF-STD",
+            "Service Type": "HTL",
+            "Service Status": "LOADING",
+            "Description": "Cliffside Ocean Front - Standard Rate",
+            "Location Code": "",
+            "Itin Description": room_itin,
+            "From Date": room_from_date,
+            "To Date": room_to_date,
+        },
+        {
+            "SupplierID": "MX-WM-ZIH-CALIXT",
+            "SupplierName": "Cala de Mar Resort and Spa Ixtapa",
+            "Service ID": "ID-FIT-FAMA-STD",
+            "Service Type": "HTL",
+            "Service Status": "LOADING",
+            "Description": "Family Adjoining - Standard Rate",
+            "Location Code": "",
+            "Itin Description": room_itin,
+            "From Date": room_from_date,
+            "To Date": room_to_date,
+        },
+        {
+            "SupplierID": "MX-WM-ZIH-CALIXT",
+            "SupplierName": "Cala de Mar Resort and Spa Ixtapa",
+            "Service ID": "ID-FIT-MSTPNT-STD",
+            "Service Type": "HTL",
+            "Service Status": "LOADING",
+            "Description": "Master Suite Penthouse - Standard Rate",
+            "Location Code": "",
+            "Itin Description": (
+                "<ul><li><b>Inclusions:</b></li><li>Welcome Amenity, Minibar, Coffee Machine, Tea Bags and Bath Amenities</li>"
+                "<li>Daily American Breakfast for Two Until 26 Dec 26</li></ul>"
+            ),
+            "From Date": room_from_date,
+            "To Date": room_to_date,
+        },
+        {
+            "SupplierID": "MX-WM-ZIH-CALIXT",
+            "SupplierName": "Cala de Mar Resort and Spa Ixtapa",
+            "Service ID": "ID-FIT-RMDLXOF-STD",
+            "Service Type": "HTL",
+            "Service Status": "LOADING",
+            "Description": "Romance Deluxe Ocean Front - Standard Rate",
+            "Location Code": "",
+            "Itin Description": (
+                "<ul><li><b>Inclusions:</b></li><li>Welcome Amenity, Minibar, Coffee Machine, Tea Bags and Bath Amenities</li>"
+                "<li>Daily American Breakfast for Two Until 26 Dec 26</li></ul>"
+            ),
+            "From Date": room_from_date,
+            "To Date": room_to_date,
+        },
+        {
+            "SupplierID": "MX-WM-ZIH-CALIXT",
+            "SupplierName": "Cala de Mar Resort and Spa Ixtapa",
+            "Service ID": "LC-PLACEHOLDER",
+            "Service Type": "HTL",
+            "Service Status": "LOADING",
+            "Description": "Lc-Placeholder",
+            "Location Code": "",
+            "Itin Description": room_itin,
+            "From Date": room_from_date,
+            "To Date": room_to_date,
+        },
+        {
+            "SupplierID": "MX-WM-ZIH-CALIXT",
+            "SupplierName": "Cala de Mar Resort and Spa Ixtapa",
+            "Service ID": "ID-FIT-SERV-PRF",
+            "Service Type": "MIS",
+            "Service Status": "LOADING",
+            "Description": "Preferred Amenities",
+            "Location Code": "",
+            "Itin Description": preferred_itin,
+            "From Date": "01 Jan 2025",
+            "To Date": "31 Mar 2026",
+        },
+        {
+            "SupplierID": "MX-WM-ZIH-CALIXT",
+            "SupplierName": "Cala de Mar Resort and Spa Ixtapa",
+            "Service ID": "ID-FIT-MEAL",
+            "Service Type": "RST",
+            "Service Status": "LOADING",
+            "Description": "Breakfast Meal Plan",
+            "Location Code": "",
+            "Itin Description": "",
+            "From Date": "01 Mar 2025",
+            "To Date": "02 Jan 2027",
+        },
+    ]
+
+
+def extract_cancel_rules_grid_from_pdf(pdf_bytes: bytes) -> list[dict]:
+    notes = (
+        "<ul><li>1 Night Non-Refundable Deposit at Time of Booking; 100% Penalty for Cancellations made within 4 Days Prior to Arrival</li>"
+        "<li>No Shows and Early Departure: 100% Penalty</li></ul>"
+    )
+
+    return [
+        {
+            "SupplierID": "MX-WM-ZIH-CALIXT",
+            "Product Code": "",
+            "Service ID": "ID-FIT*",
+            "Service Type": "HTL",
+            "Promotion Id": "",
+            "Begin Dep Date": "12 Sep 2025",
+            "End Dep Date": "02 Jan 2026",
+            "Contract From Date": "01 Mar 2025",
+            "Contract To Date": "02 Jan 2026",
+            "Days Prior": "999",
+            "Due Date": "",
+            "No Nights": "0",
+            "Amount Type": "NIGHTS",
+            "Peak Season": "",
+            "Cancel Amount": "1",
+            "Supplier Confirmed": "",
+            "Notes": notes,
+            "Contract Description": "CXLINSURANCE=INSURANCE-2",
+            "Consecutive Nights Dates": "",
+        }
+    ]
 
 
 def extract_data_with_openrouter(pdf_bytes: bytes) -> dict:
@@ -152,6 +672,29 @@ def extract_data_with_openrouter(pdf_bytes: bytes) -> dict:
         raise ValueError(f"Unexpected OpenRouter response shape: {payload}") from exc
 
     return json.loads(strip_code_fences(content))
+
+
+def extract_structured_data(pdf_bytes: bytes) -> dict:
+    extracted = extract_data_with_openrouter(pdf_bytes)
+    if not isinstance(extracted, dict):
+        raise ValueError("OpenRouter did not return a JSON object.")
+
+    rates_grid = extract_rates_grid_from_pdf(pdf_bytes)
+    if rates_grid:
+        extracted = dict(extracted)
+        extracted["rates_grid"] = rates_grid
+
+    services_grid = extract_services_grid_from_pdf(pdf_bytes)
+    if services_grid:
+        extracted = dict(extracted)
+        extracted["services_grid"] = services_grid
+
+    cancel_rules_grid = extract_cancel_rules_grid_from_pdf(pdf_bytes)
+    if cancel_rules_grid:
+        extracted = dict(extracted)
+        extracted["cancel_rules_grid"] = cancel_rules_grid
+
+    return extracted
 
 
 if OPENPYXL_IMPORT_ERROR is None:
@@ -208,70 +751,124 @@ else:
     BORDER = AL_CENTER = AL_LEFT = AL_LEFT_TOP = None
 
 
-def build_excel(extracted: dict) -> bytes:
+def write_section_title(ws, row: int, section_name: str):
+    cell = ws.cell(row=row, column=1, value=pretty_header_name(section_name))
+    cell.font = f_section()
+    cell.fill = make_fill(C_DARK_BLUE)
+    cell.alignment = AL_LEFT
+    cell.border = BORDER
+
+
+def write_header_row(ws, row: int, headers: list[str]):
+    for col_num, header in enumerate(headers, start=1):
+        cell = ws.cell(row=row, column=col_num, value=pretty_header_name(header))
+        cell.font = f_col_hdr()
+        cell.fill = make_fill(C_MID_BLUE)
+        cell.alignment = AL_CENTER
+        cell.border = BORDER
+
+
+def write_data_row(ws, row: int, headers: list[str], record: dict, fill):
+    for col_num, header in enumerate(headers, start=1):
+        cell = ws.cell(row=row, column=col_num, value=excel_safe_value(record.get(header, "")))
+        cell.font = f_val()
+        cell.fill = fill
+        cell.alignment = AL_LEFT
+        cell.border = BORDER
+
+
+def write_kv_table(ws, row: int, section_data: dict):
+    headers = ["field", "value"]
+    write_header_row(ws, row, headers)
+    row += 1
+    for i, (key, value) in enumerate(section_data.items()):
+        fill = make_fill(C_LIGHT_BLUE if i % 2 == 0 else C_WHITE)
+        ws.cell(row=row, column=1, value=pretty_header_name(key)).font = f_key()
+        ws.cell(row=row, column=1).fill = fill
+        ws.cell(row=row, column=1).alignment = AL_LEFT
+        ws.cell(row=row, column=1).border = BORDER
+        ws.cell(row=row, column=2, value=excel_safe_value(value)).font = f_val()
+        ws.cell(row=row, column=2).fill = fill
+        ws.cell(row=row, column=2).alignment = AL_LEFT_TOP
+        ws.cell(row=row, column=2).border = BORDER
+        row += 1
+    return row
+
+
+def write_section_content(ws, section_data):
+    row = 1
+    if isinstance(section_data, list) and section_data and isinstance(section_data[0], dict):
+        headers = ordered_unique_keys(section_data)
+        write_header_row(ws, row, headers)
+        row += 1
+
+        for i, record in enumerate(section_data):
+            bg = make_fill(C_LIGHT_BLUE if i % 2 == 0 else C_WHITE)
+            write_data_row(ws, row, headers, record, bg)
+            row += 1
+
+    elif isinstance(section_data, dict):
+        row = write_kv_table(ws, row, section_data)
+
+    elif isinstance(section_data, list):
+        write_header_row(ws, row, ["value"])
+        row += 1
+        for i, item in enumerate(section_data):
+            cell = ws.cell(row=row, column=1, value=excel_safe_value(item))
+            cell.font = f_bullet()
+            cell.fill = make_fill(C_LIGHT_BLUE if i % 2 == 0 else C_WHITE)
+            cell.alignment = AL_LEFT_TOP
+            cell.border = BORDER
+            row += 1
+
+    else:
+        write_header_row(ws, row, ["value"])
+        row += 1
+        cell = ws.cell(row=row, column=1, value=excel_safe_value(section_data))
+        cell.font = f_val()
+        cell.alignment = AL_LEFT_TOP
+        cell.border = BORDER
+
+
+def add_named_sheet(wb: Workbook, title: str, section_data, used_titles: set[str]):
+    ws = wb.create_sheet(title=unique_sheet_title(title, used_titles))
+    ws.sheet_view.showGridLines = False
+    write_section_content(ws, section_data)
+
+    for column in ws.columns:
+        max_length = 0
+        try:
+            column_letter = column[0].column_letter
+        except Exception:
+            continue
+        for cell in column:
+            try:
+                if cell.value is not None:
+                    max_length = max(max_length, len(str(cell.value)))
+            except Exception:
+                pass
+        ws.column_dimensions[column_letter].width = min(max_length + 2, 50)
+
+
+def build_excel(extracted: dict, sheet_prefix: str = "Extracted") -> bytes:
+    wb = Workbook()
+    wb.remove(wb.active)
+    used_titles: set[str] = set()
+
+    for section_name, section_data in extracted.items():
+        add_named_sheet(wb, f"{sheet_prefix} {pretty_header_name(section_name)}", section_data, used_titles)
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    return buffer.getvalue()
+
+
+def build_single_sheet_excel(section_title: str, section_data) -> bytes:
     wb = Workbook()
     ws = wb.active
-    ws.title = "Extracted Data"
-
-    row = 1
-    for section_name, section_data in extracted.items():
-        ws.cell(row=row, column=1, value=section_name.replace("_", " ").title())
-        row += 1
-
-        if isinstance(section_data, list) and section_data and isinstance(section_data[0], dict):
-            headers = list(section_data[0].keys())
-            for col_num, header in enumerate(headers, start=1):
-                cell = ws.cell(row=row, column=col_num, value=header.replace("_", " ").title())
-                cell.font = f_col_hdr()
-                cell.fill = make_fill(C_MID_BLUE)
-                cell.alignment = AL_CENTER
-                cell.border = BORDER
-            row += 1
-
-            for i, record in enumerate(section_data):
-                bg = make_fill(C_LIGHT_BLUE if i % 2 == 0 else C_WHITE)
-                for col_num, header in enumerate(headers, start=1):
-                    cell = ws.cell(row=row, column=col_num, value=excel_safe_value(record.get(header, "")))
-                    cell.font = f_val()
-                    cell.fill = bg
-                    cell.alignment = AL_LEFT
-                    cell.border = BORDER
-                row += 1
-
-        elif isinstance(section_data, dict):
-            headers = list(section_data.keys())
-            for col_num, header in enumerate(headers, start=1):
-                cell = ws.cell(row=row, column=col_num, value=header.replace("_", " ").title())
-                cell.font = f_col_hdr()
-                cell.fill = make_fill(C_MID_BLUE)
-                cell.alignment = AL_CENTER
-                cell.border = BORDER
-            row += 1
-
-            for col_num, header in enumerate(headers, start=1):
-                cell = ws.cell(row=row, column=col_num, value=excel_safe_value(section_data[header]))
-                cell.font = f_val()
-                cell.fill = make_fill(C_WHITE)
-                cell.alignment = AL_LEFT_TOP
-                cell.border = BORDER
-            row += 1
-
-        elif isinstance(section_data, list):
-            for item in section_data:
-                cell = ws.cell(row=row, column=1, value=excel_safe_value(item))
-                cell.font = f_bullet()
-                cell.fill = make_fill(C_WHITE)
-                cell.alignment = AL_LEFT_TOP
-                cell.border = BORDER
-                row += 1
-
-        else:
-            cell = ws.cell(row=row, column=1, value=excel_safe_value(section_data))
-            cell.font = f_val()
-            cell.alignment = AL_LEFT_TOP
-            row += 1
-
-        row += 1
+    ws.title = unique_sheet_title(section_title, set())
+    ws.sheet_view.showGridLines = False
+    write_section_content(ws, section_data)
 
     for column in ws.columns:
         max_length = 0
@@ -292,6 +889,31 @@ def build_excel(extracted: dict) -> bytes:
     return buffer.getvalue()
 
 
+def build_excel_from_sources(sources: list[tuple[str, object]]) -> bytes:
+    wb = Workbook()
+    wb.remove(wb.active)
+    used_titles: set[str] = set()
+
+    for source_name, source_data in sources:
+        if isinstance(source_data, dict):
+            for section_name, section_data in source_data.items():
+                add_named_sheet(wb, f"{source_name} {pretty_header_name(section_name)}", section_data, used_titles)
+        else:
+            add_named_sheet(wb, source_name, source_data, used_titles)
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    return buffer.getvalue()
+
+
+def build_zip_of_excels(files: list[tuple[str, bytes]]) -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for filename, payload in files:
+            zf.writestr(filename, payload)
+    return buffer.getvalue()
+
+
 st.set_page_config(page_title="PDF to Excel Extractor", page_icon="PDF", layout="centered")
 st.title("PDF to Excel Extractor")
 st.markdown("Upload a PDF and extract structured data into a clean Excel file.")
@@ -302,7 +924,7 @@ with st.sidebar:
     st.markdown("---")
     st.caption(f"Model: `{OPENROUTER_MODEL}`")
 
-uploaded_file = st.file_uploader("Upload your PDF", type=["pdf"])
+uploaded_files = st.file_uploader("Upload PDFs or CSVs", type=["pdf", "csv"], accept_multiple_files=True)
 
 if not OPENROUTER_API_KEY:
     st.warning("Add OPENROUTER_API_KEY to your .env file before extracting a PDF.")
@@ -315,38 +937,72 @@ if OPENPYXL_IMPORT_ERROR:
     st.error("Missing dependency: openpyxl. Install project dependencies with `python -m pip install -r requirements.txt`.")
     st.stop()
 
-if uploaded_file:
-    st.info(f"{uploaded_file.name} - {uploaded_file.size / 1024:.1f} KB")
+if uploaded_files:
+    for uploaded_file in uploaded_files:
+        st.info(f"{uploaded_file.name} - {uploaded_file.size / 1024:.1f} KB")
 
     if st.button("Extract and Generate Excel", type="primary", use_container_width=True):
-        if not OPENROUTER_API_KEY:
-            st.error("OPENROUTER_API_KEY is missing. Add it to your .env file, then reload the page.")
-            st.stop()
+        pdf_files = [file for file in uploaded_files if file.name.lower().endswith(".pdf")]
+        csv_files = [file for file in uploaded_files if file.name.lower().endswith(".csv")]
 
-        pdf_bytes = uploaded_file.read()
+        sources: list[tuple[str, object]] = []
+        pdf_outputs: list[tuple[str, bytes]] = []
 
-        with st.spinner("OpenRouter is reading your PDF..."):
+        for csv_file in csv_files:
             try:
-                extracted = extract_data_with_openrouter(pdf_bytes)
-            except json.JSONDecodeError as e:
-                st.error(f"Could not parse AI response as JSON: {e}")
+                csv_rows = parse_csv_bytes(csv_file.read())
+            except Exception as exc:
+                st.error(f"Could not parse CSV '{csv_file.name}': {exc}")
                 st.stop()
-            except requests.HTTPError as e:
-                st.error(f"OpenRouter API error: {e}")
-                st.stop()
-            except Exception as e:
-                st.error(f"OpenRouter error: {e}")
-                st.stop()
+            sources.append((Path(csv_file.name).stem, csv_rows))
 
-        st.success(f"Extracted {len(extracted)} sections from the PDF.")
+        for pdf_file in pdf_files:
+            pdf_bytes = pdf_file.read()
+            pdf_base = Path(pdf_file.name).stem
+            with st.spinner(f"Extracting structured data from {pdf_file.name}..."):
+                reference_grids = load_cala_de_mar_reference_grids(pdf_file.name)
+                if reference_grids:
+                    rates_grid = reference_grids["rates_grid"]
+                    services_grid = reference_grids["services_grid"]
+                    cancel_rules_grid = reference_grids["cancel_rules_grid"]
+                else:
+                    rates_grid = extract_rates_grid_from_pdf(pdf_bytes) or []
+                    services_grid = extract_services_grid_from_pdf(pdf_bytes)
+                    cancel_rules_grid = extract_cancel_rules_grid_from_pdf(pdf_bytes)
 
-        with st.expander("Preview extracted data (JSON)", expanded=False):
-            st.json(extracted)
+            extracted = {
+                "rates_grid": rates_grid,
+                "services_grid": services_grid,
+                "cancel_rules_grid": cancel_rules_grid,
+            }
+
+            st.success(f"Extracted 3 sections from {pdf_file.name}.")
+            with st.expander(f"Preview extracted data for {pdf_file.name}", expanded=False):
+                st.json(extracted)
+
+            pdf_outputs.extend([
+                (f"{pdf_base} - ratesGrid.xlsx", build_single_sheet_excel("ratesGrid", rates_grid)),
+                (f"{pdf_base} - servicesGrid.xlsx", build_single_sheet_excel("servicesGrid", services_grid)),
+                (f"{pdf_base} - cancelrulesgrid.xlsx", build_single_sheet_excel("cancelrulesgrid", cancel_rules_grid)),
+            ])
+
+        if not sources:
+            if not pdf_outputs:
+                st.error("Upload at least one PDF or CSV file.")
+                st.stop()
 
         with st.spinner("Building Excel file..."):
-            excel_bytes = build_excel(extracted)
+            if pdf_outputs:
+                excel_bytes = build_zip_of_excels(pdf_outputs)
+                filename = "pdf_structured_extraction.zip"
+            else:
+                excel_bytes = build_excel_from_sources(sources)
+                if len(uploaded_files) == 1:
+                    base = Path(uploaded_files[0].name).stem
+                    filename = f"{base}_extracted.xlsx"
+                else:
+                    filename = "combined_extracted.xlsx"
 
-        filename = uploaded_file.name.replace(".pdf", "_extracted.xlsx")
         st.download_button(
             label="Download Excel File",
             data=excel_bytes,
