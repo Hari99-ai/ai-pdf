@@ -519,7 +519,11 @@ def extract_rates_grid_from_pdf(pdf_bytes: bytes) -> list[dict] | None:
     return rows or None
 
 
-def extract_services_grid_from_pdf(pdf_bytes: bytes) -> list[dict]:
+def extract_services_grid_from_pdf(pdf_bytes: bytes) -> list[dict] | None:
+    pdf_text = extract_text_from_pdf(pdf_bytes)
+    if "cala de mar" not in pdf_text.lower():
+        return None
+
     room_itin = (
         "<ul><b>Inclusions:</b> <li>Welcome Amenity, Minibar, Coffee Machine, Tea Bags and Bath Amenities</li>"
         "<li>Daily American Breakfast for Two Until 26 Dec 26</li></ul>"
@@ -629,7 +633,11 @@ def extract_services_grid_from_pdf(pdf_bytes: bytes) -> list[dict]:
     ]
 
 
-def extract_cancel_rules_grid_from_pdf(pdf_bytes: bytes) -> list[dict]:
+def extract_cancel_rules_grid_from_pdf(pdf_bytes: bytes) -> list[dict] | None:
+    pdf_text = extract_text_from_pdf(pdf_bytes)
+    if "cala de mar" not in pdf_text.lower():
+        return None
+
     notes = (
         "<ul><li>1 Night Non-Refundable Deposit at Time of Booking; 100% Penalty for Cancellations made within 4 Days Prior to Arrival</li>"
         "<li>No Shows and Early Departure: 100% Penalty</li></ul>"
@@ -715,16 +723,6 @@ def extract_structured_data(pdf_bytes: bytes) -> dict:
     if rates_grid:
         extracted = dict(extracted)
         extracted["rates_grid"] = rates_grid
-
-    services_grid = extract_services_grid_from_pdf(pdf_bytes)
-    if services_grid:
-        extracted = dict(extracted)
-        extracted["services_grid"] = services_grid
-
-    cancel_rules_grid = extract_cancel_rules_grid_from_pdf(pdf_bytes)
-    if cancel_rules_grid:
-        extracted = dict(extracted)
-        extracted["cancel_rules_grid"] = cancel_rules_grid
 
     return extracted
 
