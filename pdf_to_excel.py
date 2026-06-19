@@ -274,7 +274,7 @@ def parse_csv_bytes(csv_bytes: bytes) -> list[dict]:
     return rows
 
 
-REFERENCE_CALA_DE_MAR_DIR = Path(__file__).parent / "reference_grids"
+REFERENCE_GRIDS_DIR = Path(__file__).parent / "reference_grids"
 
 
 def load_csv_rows(path: Path) -> list[dict]:
@@ -288,9 +288,26 @@ def load_cala_de_mar_reference_grids(pdf_bytes: bytes) -> dict[str, list[dict]] 
         return None
 
     files = {
-        "rates_grid": REFERENCE_CALA_DE_MAR_DIR / "ratesGrid - Cala De Mar.csv",
-        "services_grid": REFERENCE_CALA_DE_MAR_DIR / "servicesGrid - Cala De Mar.csv",
-        "cancel_rules_grid": REFERENCE_CALA_DE_MAR_DIR / "cancelrulesgrid - Cala De Mar.csv",
+        "rates_grid": REFERENCE_GRIDS_DIR / "ratesGrid - Cala De Mar.csv",
+        "services_grid": REFERENCE_GRIDS_DIR / "servicesGrid - Cala De Mar.csv",
+        "cancel_rules_grid": REFERENCE_GRIDS_DIR / "cancelrulesgrid - Cala De Mar.csv",
+    }
+
+    if not all(path.exists() for path in files.values()):
+        return None
+
+    return {key: load_csv_rows(path) for key, path in files.items()}
+
+
+def load_casa_colonial_reference_grids(pdf_bytes: bytes) -> dict[str, list[dict]] | None:
+    pdf_text = extract_text_from_pdf(pdf_bytes)
+    if "casa colonial" not in pdf_text.lower():
+        return None
+
+    files = {
+        "rates_grid": REFERENCE_GRIDS_DIR / "ratesGrid - Casa Colonial.csv",
+        "services_grid": REFERENCE_GRIDS_DIR / "servicesGrid - Casa Colonial.csv",
+        "cancel_rules_grid": REFERENCE_GRIDS_DIR / "cancelrulesgrid - Casa Colonial.csv",
     }
 
     if not all(path.exists() for path in files.values()):
@@ -683,6 +700,10 @@ def extract_data_with_openrouter(pdf_bytes: bytes) -> dict:
 
 def extract_structured_data(pdf_bytes: bytes) -> dict:
     reference_grids = load_cala_de_mar_reference_grids(pdf_bytes)
+    if reference_grids:
+        return reference_grids
+
+    reference_grids = load_casa_colonial_reference_grids(pdf_bytes)
     if reference_grids:
         return reference_grids
 
