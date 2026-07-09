@@ -977,7 +977,6 @@ def main():
             csv_files = [file for file in uploaded_files if file.name.lower().endswith(".csv")]
 
             sources: list[tuple[str, object]] = []
-            pdf_outputs: list[tuple[str, bytes]] = []
 
             for csv_file in csv_files:
                 try:
@@ -1001,28 +1000,19 @@ def main():
                 with st.expander(f"Preview extracted data for {pdf_file.name}", expanded=False):
                     st.json(extracted)
 
-                for section_name, section_data in extracted.items():
-                    if section_data in (None, "", [], {}):
-                        continue
-                    file_name = f"{pdf_base} - {sanitize_filename_fragment(section_name)}.xlsx"
-                    pdf_outputs.append((file_name, build_single_sheet_excel(section_name, section_data)))
+                sources.append((pdf_base, extracted))
 
             if not sources:
-                if not pdf_outputs:
-                    st.error("Upload at least one PDF or CSV file.")
-                    st.stop()
+                st.error("Upload at least one PDF or CSV file.")
+                st.stop()
 
             with st.spinner("Building Excel file..."):
-                if pdf_outputs:
-                    excel_bytes = build_zip_of_excels(pdf_outputs)
-                    filename = "pdf_structured_extraction.zip"
+                excel_bytes = build_excel_from_sources(sources)
+                if len(uploaded_files) == 1:
+                    base = Path(uploaded_files[0].name).stem
+                    filename = f"{base}_extracted.xlsx"
                 else:
-                    excel_bytes = build_excel_from_sources(sources)
-                    if len(uploaded_files) == 1:
-                        base = Path(uploaded_files[0].name).stem
-                        filename = f"{base}_extracted.xlsx"
-                    else:
-                        filename = "combined_extracted.xlsx"
+                    filename = "combined_extracted.xlsx"
 
             st.download_button(
                 label="Download Excel File",
