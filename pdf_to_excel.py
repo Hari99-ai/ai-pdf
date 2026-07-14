@@ -715,7 +715,19 @@ def extract_structured_data(pdf_bytes: bytes) -> dict:
     if reference_grids:
         return reference_grids
 
-    extracted = extract_data_with_openrouter(pdf_bytes)
+    try:
+        extracted = extract_data_with_openrouter(pdf_bytes)
+    except Exception as exc:
+        error_msg = str(exc).lower()
+        if "clipboard" in error_msg or "image" in error_msg or "cannot read" in error_msg:
+            raise ValueError(
+                "The AI model does not support image input. "
+                "Please ensure your PDF contains text data (not just images). "
+                "If the PDF is image-only, install OCR dependencies: "
+                "`pip install pytesseract pdf2image` and Tesseract."
+            ) from exc
+        raise
+
     if not isinstance(extracted, dict):
         raise ValueError("OpenRouter did not return a JSON object.")
 
@@ -725,6 +737,105 @@ def extract_structured_data(pdf_bytes: bytes) -> dict:
         extracted["rates_grid"] = rates_grid
 
     return extracted
+
+
+def calculate_extraction_percentage(extracted: dict) -> int:
+    if not extracted:
+        return 0
+
+    total_sections = len(extracted)
+    filled_sections = 0
+
+    for value in extracted.values():
+        if isinstance(value, list) and value:
+            filled_sections += 1
+        elif isinstance(value, dict) and value:
+            filled_sections += 1
+        elif isinstance(value, str) and value.strip():
+            filled_sections += 1
+
+    if total_sections == 0:
+        return 0
+
+    return int((filled_sections / total_sections) * 100)
+
+
+def extract_data_in_steps(pdf_bytes: bytes) -> dict:
+    result = {
+        "step1_raw_text": "",
+        "step2_ai_json": None,
+        "step3_excel_bytes": None,
+        "step1_char_count": 0,
+        "step2_section_count": 0,
+        "step2_total_rows": 0,
+        "data_loss_pct": 0,
+        "error": None,
+    }
+
+    step1_text = extract_text_from_pdf(pdf_bytes)
+    result["step1_raw_text"] = step1_text
+    result["step1_char_count"] = len(step1_text)
+
+    if not step1_text.strip():
+        result["error"] = "No text extracted from PDF. The file may be image-only."
+        return result
+
+    reference_grids = load_cala_de_mar_reference_grids(pdf_bytes)
+    if not reference_grids:
+        reference_grids = load_casa_colonial_reference_grids(pdf_bytes)
+
+    if reference_grids:
+        result["step2_ai_json"] = reference_grids
+    else:
+        try:
+            ai_json = extract_data_with_openrouter(pdf_bytes)
+        except Exception as exc:
+            error_msg = str(exc).lower()
+            if "clipboard" in error_msg or "image" in error_msg or "cannot read" in error_msg:
+                result["error"] = (
+                    "The AI model does not support image input. "
+                    "Please ensure your PDF contains text data (not just images). "
+                    "If the PDF is image-only, install OCR dependencies: "
+                    "`pip install pytesseract pdf2image` and Tesseract."
+                )
+            else:
+                result["error"] = str(exc)
+            return result
+
+        if not isinstance(ai_json, dict):
+            result["error"] = "OpenRouter did not return a JSON object."
+            return result
+
+        rates_grid = extract_rates_grid_from_pdf(pdf_bytes)
+        if rates_grid:
+            ai_json = dict(ai_json)
+            ai_json["rates_grid"] = rates_grid
+
+        result["step2_ai_json"] = ai_json
+
+    extracted = result["step2_ai_json"]
+    result["step2_section_count"] = len(extracted)
+    result["step2_total_rows"] = sum(
+        len(v) if isinstance(v, list) else (len(v) if isinstance(v, dict) else 1)
+        for v in extracted.values()
+    )
+
+    try:
+        result["step3_excel_bytes"] = build_excel_from_sources([("debug", extracted)])
+    except Exception as exc:
+        result["error"] = f"Excel generation failed: {exc}"
+        return result
+
+    raw_words = len(step1_text.split())
+    json_text = json.dumps(extracted, ensure_ascii=False)
+    json_words = len(json_text.split())
+    if raw_words > 0:
+        result["data_loss_pct"] = max(0, 100 - int(((json_words - raw_words) / raw_words) * 100))
+        result["data_loss_pct"] = min(100, result["data_loss_pct"])
+    else:
+        result["data_loss_pct"] = 100 if json_words > 0 else 0
+
+    return result
 
 
 if OPENPYXL_IMPORT_ERROR is None:
@@ -948,10 +1059,11 @@ def main():
     st.set_page_config(page_title="PDF to Excel Extractor", page_icon="PDF", layout="centered")
     st.title("PDF to Excel Extractor")
     st.markdown("Upload a PDF and extract structured data into a clean Excel file.")
+    st.info("Step 1: Upload your PDF or CSV. Step 2: Extract all data. Step 3: Download the Excel file.")
 
     with st.sidebar:
         st.header("How it works")
-        st.markdown("1. Upload a PDF\n2. Click Extract\n3. Download the Excel file")
+        st.markdown("1. Upload your file\n2. Extract all data\n3. Download the Excel file")
         st.markdown("---")
         st.caption(f"Model: `{OPENROUTER_MODEL}`")
 
@@ -972,35 +1084,80 @@ def main():
         for uploaded_file in uploaded_files:
             st.info(f"{uploaded_file.name} - {uploaded_file.size / 1024:.1f} KB")
 
-        if st.button("Extract and Generate Excel", type="primary", use_container_width=True):
+        if st.button("Extract all data", type="primary", use_container_width=True):
             pdf_files = [file for file in uploaded_files if file.name.lower().endswith(".pdf")]
             csv_files = [file for file in uploaded_files if file.name.lower().endswith(".csv")]
+            total_sources = len(pdf_files) + len(csv_files)
+            progress_bar = st.progress(0)
+            progress_text = st.empty()
 
             sources: list[tuple[str, object]] = []
+            completed_sources = 0
 
             for csv_file in csv_files:
                 try:
+                    progress_text.info(f"Processing {csv_file.name}... 0%")
                     csv_rows = parse_csv_bytes(csv_file.read())
                 except Exception as exc:
                     st.error(f"Could not parse CSV '{csv_file.name}': {exc}")
                     st.stop()
                 sources.append((Path(csv_file.name).stem, csv_rows))
+                completed_sources += 1
+                percent_complete = int((completed_sources / total_sources) * 100) if total_sources else 100
+                progress_bar.progress(percent_complete / 100)
+                progress_text.success(f"{csv_file.name} processed: {percent_complete}% complete")
 
             for pdf_file in pdf_files:
                 pdf_bytes = pdf_file.read()
                 pdf_base = Path(pdf_file.name).stem
-                with st.spinner(f"Extracting structured data from {pdf_file.name}..."):
-                    extracted = extract_structured_data(pdf_bytes)
+                with st.spinner(f"Extracting data from {pdf_file.name}..."):
+                    progress_text.info(f"Extracting {pdf_file.name}...")
+                    result = extract_data_in_steps(pdf_bytes)
 
-                if not extracted:
-                    st.warning(f"No structured sections were extracted from {pdf_file.name}.")
+                if result["error"]:
+                    st.error(f"Error extracting {pdf_file.name}: {result['error']}")
+                    completed_sources += 1
+                    percent_complete = int((completed_sources / total_sources) * 100) if total_sources else 100
+                    progress_bar.progress(percent_complete / 100)
                     continue
 
-                st.success(f"Extracted structured data from {pdf_file.name}.")
-                with st.expander(f"Preview extracted data for {pdf_file.name}", expanded=False):
-                    st.json(extracted)
+                st.markdown(f"---\n### Debug: {pdf_file.name}")
 
-                sources.append((pdf_base, extracted))
+                step1_ok = result["step1_char_count"] > 0
+                step2_ok = result["step2_ai_json"] is not None
+                step3_ok = result["step3_excel_bytes"] is not None
+
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Step 1: Raw Text", f"{result['step1_char_count']} chars", "OK" if step1_ok else "EMPTY")
+                c2.metric("Step 2: AI JSON", f"{result['step2_section_count']} sections", "OK" if step2_ok else "FAILED")
+                c3.metric("Step 3: Excel", "Generated" if step3_ok else "FAILED", f"Data retention: {result['data_loss_pct']}%")
+
+                with st.expander(f"Step 1 - Raw PDF Text ({result['step1_char_count']} chars)", expanded=False):
+                    st.text_area("Extracted text", result["step1_raw_text"], height=300, disabled=True, key=f"step1_{pdf_file.name}")
+
+                with st.expander(f"Step 2 - AI Structured JSON ({result['step2_section_count']} sections)", expanded=False):
+                    st.json(result["step2_ai_json"])
+
+                with st.expander(f"Step 3 - Excel Preview", expanded=False):
+                    if step3_ok:
+                        st.success(f"Excel file generated successfully.")
+                        st.metric("Total Rows", result["step2_total_rows"])
+                        st.metric("Data Retention", f"{result['data_loss_pct']}%")
+                    else:
+                        st.error("Excel generation failed.")
+
+                if result["data_loss_pct"] >= 95:
+                    st.success(f"No data loss detected from {pdf_file.name}.")
+                elif result["data_loss_pct"] >= 80:
+                    st.warning(f"Minor data variation from {pdf_file.name}.")
+                else:
+                    st.error(f"Significant data loss detected from {pdf_file.name}!")
+
+                sources.append((pdf_base, result["step2_ai_json"]))
+                completed_sources += 1
+                percent_complete = int((completed_sources / total_sources) * 100) if total_sources else 100
+                progress_bar.progress(percent_complete / 100)
+                progress_text.success(f"{pdf_file.name} extracted: {percent_complete}% complete")
 
             if not sources:
                 st.error("Upload at least one PDF or CSV file.")
@@ -1013,6 +1170,9 @@ def main():
                     filename = f"{base}_extracted.xlsx"
                 else:
                     filename = "combined_extracted.xlsx"
+
+            progress_bar.progress(1.0)
+            progress_text.success("Extraction and Excel generation complete: 100%")
 
             st.download_button(
                 label="Download Excel File",
