@@ -17,9 +17,9 @@ Output Schema:
     {
       "name": "descriptive_table_name_in_snake_case",
       "type": "table",
-      "headers": ["column_1", "column_2", "column_3"],
+      "headers": ["column_1", "column_2", "column_3", "context"],
       "rows": [
-        {"column_1": "value_1", "column_2": "value_2", "column_3": "value_3"}
+        {"column_1": "value_1", "column_2": "value_2", "column_3": "value_3", "context": "Brief explanation of what this row represents"}
       ]
     }
   ]
@@ -33,6 +33,7 @@ Rules:
 5. If a table spans this page, include only what is visible on THIS page (merging across pages happens later).
 6. If NO table exists on this page, return {"sections": []}.
 7. Return ONLY valid JSON. No markdown fences, no explanations, no preamble.
+8. IMPORTANT: Every row MUST include a "context" field with a brief, one-line explanation of what the row data means (e.g., "Rate per night for oceanfront room", "Seasonal pricing for holiday period", "Extra person charge"). This helps users understand the data at a glance.
 """
 
 def clean_json_text(text: str) -> str:

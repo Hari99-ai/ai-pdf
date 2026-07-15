@@ -88,6 +88,7 @@ Rules:
 6. Keep multi-word headers together. Do not split column names.
 7. If something is unknown, use an empty string, empty list, or empty object.
 8. Return ONLY valid JSON. No markdown fences, no explanations, no preamble.
+9. IMPORTANT: Every table row MUST include a "context" field with a brief, one-line explanation of what the row data means (e.g., "Rate per night for oceanfront room", "Seasonal pricing for holiday period", "Extra person charge"). This helps users understand the data at a glance.
 
 Required top-level keys:
 {
@@ -115,7 +116,7 @@ Required top-level keys:
       "table_name": "",
       "description": "",
       "rows": [
-        {"column_one": "", "column_two": "", "page_reference": ""}
+        {"column_one": "", "column_two": "", "context": "Brief explanation of this row", "page_reference": ""}
       ]
     }
   ],
@@ -142,14 +143,15 @@ Rules:
 4. Keep multi-word headers intact.
 5. Do not include narrative text, policies, or paragraphs that are not part of the 3 tables.
 6. If a section is better represented as a key-value table, still keep it under the matching key above.
+7. IMPORTANT: Every row MUST include a "context" field with a brief, one-line explanation of what the row data means (e.g., "Rate per night for oceanfront room", "Seasonal pricing for holiday period", "Extra person charge"). This helps users understand the data at a glance.
 
 Example:
 {
   "rates_grid": [
-    {"dates": "January 03rd - March 31st, 2026", "cliffside_ocean_front": "$320"}
+    {"dates": "January 03rd - March 31st, 2026", "cliffside_ocean_front": "$320", "context": "Seasonal rates for cliffside oceanfront rooms during peak winter season"}
   ],
   "services_grid": [
-    {"item": "Extra Adult", "charge": "$100 USD"}
+    {"item": "Extra Adult", "charge": "$100 USD", "context": "Additional person surcharge per night"}
   ],
   "cancel_rules_grid": {
     "bank_name": "Santander Mexico",

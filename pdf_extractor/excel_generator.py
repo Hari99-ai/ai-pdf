@@ -182,6 +182,16 @@ def build_excel_workbook(groups: Dict[str, Dict[str, Any]]) -> bytes:
                     cell.alignment = align_data_center
                 else:
                     cell.alignment = align_data_left
+                
+                # Style the Context column distinctly
+                if h_lower == "context":
+                    cell.font = Font(name="Segoe UI", size=10, italic=True, color="555555")
+                    cell.fill = PatternFill(
+                        start_color="FFF8E1" if row_idx % 2 == 0 else "FFFDF5",
+                        end_color="FFF8E1" if row_idx % 2 == 0 else "FFFDF5",
+                        fill_type="solid"
+                    )
+                    cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
                     
         # Apply Excel Table format
         try:
