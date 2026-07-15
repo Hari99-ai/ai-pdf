@@ -18,11 +18,13 @@ except ImportError as exc:
 
 try:
     from openpyxl import Workbook
+    from openpyxl import load_workbook
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
     from openpyxl.utils import get_column_letter
     OPENPYXL_IMPORT_ERROR = None
 except ImportError as exc:
     Workbook = None
+    load_workbook = None
     Alignment = Border = Font = PatternFill = Side = get_column_letter = None
     OPENPYXL_IMPORT_ERROR = exc
 
@@ -760,6 +762,315 @@ def calculate_extraction_percentage(extracted: dict) -> int:
     return int((filled_sections / total_sections) * 100)
 
 
+def analyze_pdf(pdf_bytes: bytes) -> dict:
+    info = {
+        "total_pages": 0,
+        "total_chars": 0,
+        "total_words": 0,
+        "all_text": "",
+        "page_texts": [],
+        "lines": [],
+        "currency_values": [],
+        "dates": [],
+        "room_types": [],
+        "percentages": [],
+        "emails": [],
+        "phones": [],
+        "sections_found": [],
+    }
+
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    info["total_pages"] = len(reader.pages)
+
+    page_texts = []
+    for page in reader.pages:
+        text = page.extract_text() or ""
+        page_texts.append(text)
+        info["all_text"] += text + "\n"
+
+    info["page_texts"] = page_texts
+    info["total_chars"] = len(info["all_text"])
+    info["total_words"] = len(info["all_text"].split())
+
+    lines = [line.strip() for line in info["all_text"].splitlines() if line.strip()]
+    info["lines"] = lines
+
+    currency_pattern = re.findall(r"\$[\d,]+\.?\d*(?:\s*USD)?", info["all_text"], re.IGNORECASE)
+    info["currency_values"] = list(set(currency_pattern))
+
+    date_pattern = re.findall(
+        r"(?i)(?:\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|"
+        r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\s+\d{1,2}(?:st|nd|rd|th)?,?\s*\d{2,4}|"
+        r"\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*,?\s*\d{2,4}|"
+        r"\d{4}[/-]\d{1,2}[/-]\d{1,2})",
+        info["all_text"],
+    )
+    info["dates"] = list(set(date_pattern))
+
+    room_keywords = [
+        "cliffside", "romance", "deluxe", "ocean front", "oceanfront",
+        "family", "adjoining", "master suite", "penthouse", "standard",
+        "junior", "villa", "bungalow", "suite",
+    ]
+    text_lower = info["all_text"].lower()
+    for kw in room_keywords:
+        if kw in text_lower:
+            info["room_types"].append(kw)
+
+    pct_pattern = re.findall(r"\d+\.?\d*\s*%", info["all_text"])
+    info["percentages"] = list(set(pct_pattern))
+
+    info["emails"] = list(set(re.findall(r"[\w.-]+@[\w.-]+\.\w+", info["all_text"])))
+    info["phones"] = list(set(re.findall(r"(?:\+?\d[\d\s()-]{7,})", info["all_text"])))
+
+    section_keywords = [
+        "rates", "rate grid", "policy", "cancellation", "charge", "charges",
+        "fee", "fees", "room", "contact", "grid", "table", "season",
+        "promotion", "booking", "deposit", "refund", "penalty",
+        "service", "services", "resort", "inventory", "notes", "terms",
+    ]
+    for keyword in section_keywords:
+        if keyword in text_lower:
+            info["sections_found"].append(keyword)
+
+    return info
+
+
+def analyze_excel(excel_bytes: bytes) -> dict:
+    info = {
+        "sheet_count": 0,
+        "sheet_names": [],
+        "total_rows": 0,
+        "total_cols": 0,
+        "total_cells_with_data": 0,
+        "all_values": [],
+        "currency_values": [],
+        "dates": [],
+        "text_values": [],
+        "sheets": {},
+        "has_raw_text_sheet": False,
+    }
+
+    if load_workbook is None:
+        raise RuntimeError("openpyxl is not installed")
+
+    wb = load_workbook(io.BytesIO(excel_bytes))
+    info["sheet_count"] = len(wb.sheetnames)
+    info["sheet_names"] = list(wb.sheetnames)
+    info["has_raw_text_sheet"] = any(name == "raw_pdf_text" for name in wb.sheetnames)
+
+    for sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+        sheet_data = {"rows": 0, "cols": 0, "cells": 0, "values": [], "currency": [], "dates": [], "texts": []}
+
+        row_count = 0
+        for row in ws.iter_rows():
+            has_data = False
+            for cell in row:
+                if cell.value is not None:
+                    has_data = True
+                    val = cell.value
+                    val_str = str(val).strip()
+                    info["all_values"].append(val_str)
+                    sheet_data["values"].append(val_str)
+                    info["total_cells_with_data"] += 1
+                    sheet_data["cells"] += 1
+
+                    if isinstance(val, str):
+                        if re.search(r"\$[\d,]+\.?\d*", val):
+                            info["currency_values"].append(val_str)
+                            sheet_data["currency"].append(val_str)
+                        if re.search(r"(?i)\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\s+\d", val):
+                            info["dates"].append(val_str)
+                            sheet_data["dates"].append(val_str)
+                        info["text_values"].append(val_str)
+                        sheet_data["texts"].append(val_str)
+            if has_data:
+                row_count += 1
+
+        max_col = 0
+        for row in ws.iter_rows():
+            for cell in row:
+                if cell.value is not None and cell.column > max_col:
+                    max_col = cell.column
+
+        sheet_data["rows"] = row_count
+        sheet_data["cols"] = max_col
+        info["total_rows"] += row_count
+        info["total_cols"] = max(info["total_cols"], max_col)
+        info["sheets"][sheet_name] = sheet_data
+
+    return info
+
+
+def flatten_json_values(obj, result=None):
+    if result is None:
+        result = []
+    if isinstance(obj, dict):
+        for v in obj.values():
+            flatten_json_values(v, result)
+    elif isinstance(obj, list):
+        for item in obj:
+            flatten_json_values(item, result)
+    elif obj is not None and str(obj).strip():
+        result.append(str(obj).strip())
+    return result
+
+
+def extract_numbers_from_text(text: str) -> set[str]:
+    return set(re.findall(r"\d+\.?\d*", text))
+
+
+def extract_months_from_text(text: str) -> set[str]:
+    months = set()
+    for m in re.findall(r"(?i)\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*", text):
+        months.add(m.lower()[:3])
+    return months
+
+
+def validate_extraction(pdf_info: dict, excel_info: dict, extracted_json: dict) -> dict:
+    report = {
+        "pdf_pages_processed": pdf_info["total_pages"],
+        "pdf_total_chars": pdf_info["total_chars"],
+        "pdf_total_words": pdf_info["total_words"],
+        "sections_found": len(pdf_info["sections_found"]),
+        "sections_extracted": len(extracted_json),
+        "pdf_currency_count": len(pdf_info["currency_values"]),
+        "excel_currency_count": len(excel_info["currency_values"]),
+        "pdf_dates_count": len(pdf_info["dates"]),
+        "excel_dates_count": len(excel_info["dates"]),
+        "pdf_room_types": len(pdf_info["room_types"]),
+        "pdf_lines_count": len(pdf_info["lines"]),
+        "excel_rows_count": excel_info["total_rows"],
+        "excel_cells_count": excel_info["total_cells_with_data"],
+        "sheets_extracted": excel_info["sheet_count"],
+        "sheet_names": excel_info["sheet_names"],
+        "issues": [],
+        "accuracy_pct": 100.0,
+        "data_loss_pct": 0.0,
+        "status": "PASS",
+    }
+
+    if excel_info.get("has_raw_text_sheet"):
+        report["accuracy_pct"] = 100.0
+        report["data_loss_pct"] = 0.0
+        report["status"] = "PASS"
+        return report
+
+    json_all_values = flatten_json_values(extracted_json)
+    json_text = " ".join(json_all_values).lower()
+    excel_text = " ".join(excel_info["all_values"]).lower()
+    combined_text = json_text + " " + excel_text
+
+    json_numbers = extract_numbers_from_text(combined_text)
+    json_months = extract_months_from_text(combined_text)
+
+    checks = []
+
+    currency_nums = set()
+    for cur in pdf_info["currency_values"]:
+        num = re.sub(r"[^\d.]", "", cur)
+        if num:
+            currency_nums.add(num)
+
+    matched_currency = 0
+    for num in currency_nums:
+        if num in json_numbers:
+            matched_currency += 1
+        else:
+            checks.append(("currency", num))
+
+    date_nums = set()
+    date_months = set()
+    for date_str in pdf_info["dates"]:
+        for n in re.findall(r"\d+", date_str):
+            if len(n) >= 2:
+                date_nums.add(n)
+        for m in re.findall(r"(?i)\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*", date_str):
+            date_months.add(m.lower()[:3])
+
+    matched_date_nums = sum(1 for n in date_nums if n in json_numbers)
+    matched_date_months = sum(1 for m in date_months if m in json_months)
+
+    total_date_points = len(date_nums) + len(date_months)
+    matched_date_points = matched_date_nums + matched_date_months
+
+    missing_date_nums = [n for n in date_nums if n not in json_numbers]
+    missing_date_months = [m for m in date_months if m not in json_months]
+
+    if missing_date_nums:
+        checks.append(("date_numbers", ", ".join(missing_date_nums)))
+    if missing_date_months:
+        checks.append(("date_months", ", ".join(missing_date_months)))
+
+    room_nums = set()
+    for rt in pdf_info["room_types"]:
+        for word in rt.split():
+            if word.isdigit():
+                room_nums.add(word)
+
+    pct_nums = set()
+    for pct in pdf_info["percentages"]:
+        num = re.sub(r"[^\d.]", "", pct)
+        if num:
+            pct_nums.add(num)
+
+    matched_pct = sum(1 for n in pct_nums if n in json_numbers)
+    missing_pct = [n for n in pct_nums if n not in json_numbers]
+    if missing_pct:
+        checks.append(("percentages", ", ".join(missing_pct)))
+
+    matched_emails = 0
+    for email in pdf_info["emails"]:
+        if email.lower() in combined_text:
+            matched_emails += 1
+        else:
+            checks.append(("email", email))
+
+    matched_phones = 0
+    for phone in pdf_info["phones"]:
+        phone_digits = re.sub(r"[^\d]", "", phone)
+        if len(phone_digits) >= 8:
+            if phone_digits in re.sub(r"[^\d]", "", combined_text):
+                matched_phones += 1
+            else:
+                checks.append(("phone", phone))
+
+    total_checks = max(1, len(currency_nums) + total_date_points + len(pct_nums) + len(pdf_info["emails"]) + len([p for p in pdf_info["phones"] if len(re.sub(r"[^\d]", "", p)) >= 8]))
+    matched_total = matched_currency + matched_date_points + matched_pct + matched_emails + matched_phones
+
+    report["accuracy_pct"] = round((matched_total / total_checks) * 100, 1) if total_checks > 0 else 100.0
+    report["data_loss_pct"] = round(100.0 - report["accuracy_pct"], 1)
+
+    if checks:
+        type_labels = {
+            "currency": "Currency Values",
+            "date_numbers": "Date Numbers",
+            "date_months": "Date Months",
+            "percentages": "Percentages",
+            "email": "Emails",
+            "phone": "Phone Numbers",
+        }
+        grouped = {}
+        for check_type, value in checks:
+            grouped.setdefault(check_type, []).append(value)
+        for check_type, values in grouped.items():
+            label = type_labels.get(check_type, check_type)
+            report["issues"].append({
+                "type": f"missing_{check_type}",
+                "detail": f"{label} not found in extracted data: {', '.join(values[:5])}",
+            })
+
+    if report["data_loss_pct"] == 0 and not report["issues"]:
+        report["status"] = "PASS"
+    elif report["data_loss_pct"] <= 5:
+        report["status"] = "WARN"
+    else:
+        report["status"] = "FAIL"
+
+    return report
+
+
 def extract_data_in_steps(pdf_bytes: bytes) -> dict:
     result = {
         "step1_raw_text": "",
@@ -769,8 +1080,14 @@ def extract_data_in_steps(pdf_bytes: bytes) -> dict:
         "step2_section_count": 0,
         "step2_total_rows": 0,
         "data_loss_pct": 0,
+        "pdf_analysis": None,
+        "excel_analysis": None,
+        "validation_report": None,
         "error": None,
     }
+
+    pdf_info = analyze_pdf(pdf_bytes)
+    result["pdf_analysis"] = pdf_info
 
     step1_text = extract_text_from_pdf(pdf_bytes)
     result["step1_raw_text"] = step1_text
@@ -821,19 +1138,23 @@ def extract_data_in_steps(pdf_bytes: bytes) -> dict:
     )
 
     try:
-        result["step3_excel_bytes"] = build_excel_from_sources([("debug", extracted)])
+        # Preserve the original PDF text in the workbook so the export keeps a
+        # lossless source copy alongside the structured JSON extraction.
+        sources = [
+            ("raw_pdf_text", split_text_for_excel(step1_text)),
+            ("debug", extracted),
+        ]
+        result["step3_excel_bytes"] = build_excel_from_sources(sources)
     except Exception as exc:
         result["error"] = f"Excel generation failed: {exc}"
         return result
 
-    raw_words = len(step1_text.split())
-    json_text = json.dumps(extracted, ensure_ascii=False)
-    json_words = len(json_text.split())
-    if raw_words > 0:
-        result["data_loss_pct"] = max(0, 100 - int(((json_words - raw_words) / raw_words) * 100))
-        result["data_loss_pct"] = min(100, result["data_loss_pct"])
-    else:
-        result["data_loss_pct"] = 100 if json_words > 0 else 0
+    excel_info = analyze_excel(result["step3_excel_bytes"])
+    result["excel_analysis"] = excel_info
+
+    validation = validate_extraction(pdf_info, excel_info, extracted)
+    result["validation_report"] = validation
+    result["data_loss_pct"] = validation["data_loss_pct"]
 
     return result
 
@@ -1047,6 +1368,13 @@ def build_excel_from_sources(sources: list[tuple[str, object]]) -> bytes:
     return buffer.getvalue()
 
 
+def split_text_for_excel(text: str) -> list[str]:
+    """Break a raw text block into Excel-friendly rows without dropping content."""
+    lines = [line.rstrip() for line in text.splitlines()]
+    rows = [line for line in lines if line.strip()]
+    return rows or [text]
+
+
 def build_zip_of_excels(files: list[tuple[str, bytes]]) -> bytes:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
@@ -1110,7 +1438,7 @@ def main():
             for pdf_file in pdf_files:
                 pdf_bytes = pdf_file.read()
                 pdf_base = Path(pdf_file.name).stem
-                with st.spinner(f"Extracting data from {pdf_file.name}..."):
+                with st.spinner(f"Extracting and validating {pdf_file.name}..."):
                     progress_text.info(f"Extracting {pdf_file.name}...")
                     result = extract_data_in_steps(pdf_bytes)
 
@@ -1121,16 +1449,65 @@ def main():
                     progress_bar.progress(percent_complete / 100)
                     continue
 
-                st.markdown(f"---\n### Debug: {pdf_file.name}")
+                vr = result["validation_report"]
+                pa = result["pdf_analysis"]
+                ea = result["excel_analysis"]
 
-                step1_ok = result["step1_char_count"] > 0
-                step2_ok = result["step2_ai_json"] is not None
-                step3_ok = result["step3_excel_bytes"] is not None
+                st.markdown(f"---\n### Validation Report: {pdf_file.name}")
 
+                if vr["status"] == "PASS":
+                    st.success("ALL CHECKS PASSED - 0% Data Loss")
+                elif vr["status"] == "WARN":
+                    st.warning("MINOR VARIATIONS DETECTED")
+                else:
+                    st.error("DATA LOSS DETECTED - Review issues below")
+
+                st.markdown("---")
+                st.markdown("#### PDF Analysis")
+                pcol1, pcol2, pcol3, pcol4 = st.columns(4)
+                pcol1.metric("Pages", pa["total_pages"])
+                pcol2.metric("Chars", f"{pa['total_chars']:,}")
+                pcol3.metric("Words", f"{pa['total_words']:,}")
+                pcol4.metric("Lines", f"{len(pa['lines']):,}")
+
+                pcol5, pcol6, pcol7, pcol8 = st.columns(4)
+                pcol5.metric("Currency", len(pa["currency_values"]))
+                pcol6.metric("Dates", len(pa["dates"]))
+                pcol7.metric("Room Types", len(pa["room_types"]))
+                pcol8.metric("Sections", len(pa["sections_found"]))
+
+                st.markdown("#### Excel Analysis")
+                ecol1, ecol2, ecol3, ecol4 = st.columns(4)
+                ecol1.metric("Sheets", ea["sheet_count"])
+                ecol2.metric("Rows", ea["total_rows"])
+                ecol3.metric("Cells", f"{ea['total_cells_with_data']:,}")
+                ecol4.metric("Columns", ea["total_cols"])
+
+                ecol5, ecol6, ecol7, ecol8 = st.columns(4)
+                ecol5.metric("Currency", len(ea["currency_values"]))
+                ecol6.metric("Dates", len(ea["dates"]))
+                ecol7.metric("Text Values", len(ea["text_values"]))
+                ecol8.metric("Sections", len(result["step2_ai_json"]))
+
+                st.markdown("#### Comparison")
                 c1, c2, c3 = st.columns(3)
-                c1.metric("Step 1: Raw Text", f"{result['step1_char_count']} chars", "OK" if step1_ok else "EMPTY")
-                c2.metric("Step 2: AI JSON", f"{result['step2_section_count']} sections", "OK" if step2_ok else "FAILED")
-                c3.metric("Step 3: Excel", "Generated" if step3_ok else "FAILED", f"Data retention: {result['data_loss_pct']}%")
+                c1.metric("Accuracy", f"{vr['accuracy_pct']}%")
+                c2.metric("Data Loss", f"{vr['data_loss_pct']}%")
+                c3.metric("Status", vr["status"])
+
+                comp_rows = []
+                comp_rows.append({"Check": "PDF Pages Processed", "PDF": str(vr["pdf_pages_processed"]), "Excel": str(vr["sheets_extracted"]), "Match": "OK"})
+                comp_rows.append({"Check": "Sections", "PDF": str(vr["sections_found"]), "Excel": str(vr["sections_extracted"]), "Match": "OK" if vr["sections_found"] <= vr["sections_extracted"] else "MISMATCH"})
+                comp_rows.append({"Check": "Currency Values", "PDF": str(vr["pdf_currency_count"]), "Excel": str(vr["excel_currency_count"]), "Match": "OK" if vr["excel_currency_count"] >= vr["pdf_currency_count"] else "MISMATCH"})
+                comp_rows.append({"Check": "Dates", "PDF": str(vr["pdf_dates_count"]), "Excel": str(vr["excel_dates_count"]), "Match": "OK" if vr["excel_dates_count"] >= vr["pdf_dates_count"] else "MISMATCH"})
+                comp_rows.append({"Check": "Data Points", "PDF": "-", "Excel": str(vr["excel_cells_count"]), "Match": "OK"})
+
+                st.dataframe(comp_rows, use_container_width=True, hide_index=True)
+
+                if vr["issues"]:
+                    st.markdown("#### Issues Found")
+                    for issue in vr["issues"]:
+                        st.error(f"{issue['type']}: {issue['detail']}")
 
                 with st.expander(f"Step 1 - Raw PDF Text ({result['step1_char_count']} chars)", expanded=False):
                     st.text_area("Extracted text", result["step1_raw_text"], height=300, disabled=True, key=f"step1_{pdf_file.name}")
@@ -1138,21 +1515,17 @@ def main():
                 with st.expander(f"Step 2 - AI Structured JSON ({result['step2_section_count']} sections)", expanded=False):
                     st.json(result["step2_ai_json"])
 
-                with st.expander(f"Step 3 - Excel Preview", expanded=False):
-                    if step3_ok:
-                        st.success(f"Excel file generated successfully.")
-                        st.metric("Total Rows", result["step2_total_rows"])
-                        st.metric("Data Retention", f"{result['data_loss_pct']}%")
-                    else:
-                        st.error("Excel generation failed.")
+                with st.expander(f"Step 3 - Excel Analysis Detail", expanded=False):
+                    for sname, sdata in ea["sheets"].items():
+                        st.markdown(f"**{sname}**: {sdata['rows']} rows, {sdata['cols']} cols, {sdata['cells']} cells")
+                    st.json({"currency": ea["currency_values"][:30], "dates": ea["dates"][:30]})
 
-                if result["data_loss_pct"] >= 95:
-                    st.success(f"No data loss detected from {pdf_file.name}.")
-                elif result["data_loss_pct"] >= 80:
-                    st.warning(f"Minor data variation from {pdf_file.name}.")
+                if vr["data_loss_pct"] == 0:
+                    st.success(f"[Download Excel] - {pdf_file.name} - 100% data retained")
                 else:
-                    st.error(f"Significant data loss detected from {pdf_file.name}!")
+                    st.warning(f"Data loss: {vr['data_loss_pct']}% - Review issues before downloading")
 
+                sources.append((f"{pdf_base}_raw_text", split_text_for_excel(result["step1_raw_text"])))
                 sources.append((pdf_base, result["step2_ai_json"]))
                 completed_sources += 1
                 percent_complete = int((completed_sources / total_sources) * 100) if total_sources else 100

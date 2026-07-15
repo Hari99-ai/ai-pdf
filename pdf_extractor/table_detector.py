@@ -159,9 +159,10 @@ def clean_repeated_headers(rows: List[Dict[str, Any]], headers: List[str]) -> Li
     for row in rows:
         # Check if the row matches the header names themselves
         row_values_lower = {str(val).lower().strip() for val in row.values()}
-        
-        # If the row values are an exact match or subset of the headers, skip it
-        if row_values_lower and row_values_lower.issubset(header_lower_set):
+
+        # Only drop rows that are an exact header repeat.
+        # A subset check is too aggressive and can remove legitimate data rows.
+        if row_values_lower and row_values_lower == header_lower_set:
             logger.info(f"Removing repeated header row: {row}")
             continue
             
@@ -169,18 +170,10 @@ def clean_repeated_headers(rows: List[Dict[str, Any]], headers: List[str]) -> Li
     return cleaned_rows
 
 def clean_duplicate_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Remove exact duplicate rows while preserving order and genuine repeated values."""
-    seen = set()
-    cleaned = []
-    for row in rows:
-        # Create a stable representation of the row dict
-        row_str = json.dumps(row, sort_keys=True)
-        if row_str not in seen:
-            seen.add(row_str)
-            cleaned.append(row)
-        else:
-            logger.info(f"Removing duplicate row: {row}")
-    return cleaned
+    """Preserve all rows to avoid silently dropping repeated values."""
+    # Duplicate-looking rows can still be valid data in pricing/policy tables.
+    # Keep them all and let downstream consumers decide how to present them.
+    return rows
 
 def merge_consecutive_tables(sections: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Merge consecutive table sections that have identical or highly similar schemas (headers)."""
@@ -219,12 +212,17 @@ def merge_consecutive_tables(sections: List[Dict[str, Any]]) -> List[Dict[str, A
                 prev_rows = previous.get("rows", [])
                 curr_rows = current.get("rows", [])
                 
-                # Standardize column keys to align with the first table's keys
+                # Standardize column keys by name, not by position.
+                # This avoids corrupting values when header order changes between pages.
                 standardized_curr_rows = []
                 for row in curr_rows:
                     new_row = {}
-                    for prev_h, curr_h in zip(previous.get("headers", []), current.get("headers", [])):
-                        new_row[prev_h] = row.get(curr_h, "")
+                    prev_headers = previous.get("headers", [])
+                    curr_headers = current.get("headers", [])
+                    curr_lookup = {str(h).strip().lower(): h for h in curr_headers}
+                    for prev_h in prev_headers:
+                        curr_key = curr_lookup.get(str(prev_h).strip().lower())
+                        new_row[prev_h] = row.get(curr_key, "") if curr_key is not None else ""
                     standardized_curr_rows.append(new_row)
                 
                 # Combine rows and clean up

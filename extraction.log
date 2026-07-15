@@ -1162,3 +1162,15 @@
 [2026-07-14 15:39:32] [INFO] [excel_generator.py:342]: Initializing Excel workbook generation...
 [2026-07-14 15:39:33] [INFO] [excel_generator.py:402]: Created worksheet 'Additional Data' with 501 rows
 [2026-07-14 15:39:33] [INFO] [excel_generator.py:404]: Workbook generation finished.
+[2026-07-15 10:38:33] [INFO] [table_detector.py:166]: Removing repeated header row: {'a': 'DATES', 'b': 'Cliffside Ocean Front', 'c': 'Romance Deluxe Ocean Front'}
+[2026-07-15 10:38:33] [INFO] [table_detector.py:209]: Merging consecutive tables: 'rates_page_1' and 'rates_page_2'
+[2026-07-15 10:38:33] [INFO] [table_detector.py:209]: Merging consecutive tables: 'policy_page_1' and 'policy_page_2'
+[2026-07-15 10:43:04] [INFO] [table_detector.py:166]: Removing repeated header row: {'a': 'DATES', 'b': 'Cliffside Ocean Front', 'c': 'Romance Deluxe Ocean Front'}
+[2026-07-15 10:43:04] [INFO] [table_detector.py:209]: Merging consecutive tables: 'rates_page_1' and 'rates_page_2'
+[2026-07-15 10:43:04] [INFO] [table_detector.py:209]: Merging consecutive tables: 'policy_page_1' and 'policy_page_2'
+[2026-07-15 10:47:14] [INFO] [table_detector.py:166]: Removing repeated header row: {'a': 'DATES', 'b': 'Cliffside Ocean Front', 'c': 'Romance Deluxe Ocean Front'}
+[2026-07-15 10:47:14] [INFO] [table_detector.py:209]: Merging consecutive tables: 'rates_page_1' and 'rates_page_2'
+[2026-07-15 10:47:14] [INFO] [table_detector.py:209]: Merging consecutive tables: 'policy_page_1' and 'policy_page_2'
+[2026-07-15 10:47:41] [INFO] [table_detector.py:166]: Removing repeated header row: {'a': 'DATES', 'b': 'Cliffside Ocean Front', 'c': 'Romance Deluxe Ocean Front'}
+[2026-07-15 10:47:41] [INFO] [table_detector.py:209]: Merging consecutive tables: 'rates_page_1' and 'rates_page_2'
+[2026-07-15 10:47:41] [INFO] [table_detector.py:209]: Merging consecutive tables: 'policy_page_1' and 'policy_page_2'
