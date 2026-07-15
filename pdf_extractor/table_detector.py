@@ -7,27 +7,32 @@ from pdf_extractor.logging_config import logger
 from pdf_extractor.pdf_parser import PDFPage
 from pdf_extractor.ocr_engine import encode_image_to_base64
 
-DETECTION_PROMPT = """Analyze this document page and extract ALL structured data (tables, price lists, policies, terms, rates, fee schedules, promotions, amenities) into a single JSON object.
+DETECTION_PROMPT = """You are a table extraction engine. Your ONLY job is to find every table on this page and extract it exactly as structured data.
+
+CRITICAL: Detect every single table, grid, matrix, rate sheet, schedule, price list, fee schedule, comparison chart, and any data arranged in rows and columns — even if it has no visible borders. If data is aligned in columns, treat it as a table.
 
 Output Schema:
 {
   "sections": [
     {
-      "name": "section_descriptive_name_in_snake_case",
-      "type": "table",  // Must be one of: "table", "key_value", "list"
-      "headers": ["column_1", "column_2"], // Required if type is "table"
+      "name": "descriptive_table_name_in_snake_case",
+      "type": "table",
+      "headers": ["column_1", "column_2", "column_3"],
       "rows": [
-        {"column_1": "value_1", "column_2": "value_2"}
-      ] // If type is "table", this is a list of row objects. If type is "key_value", this is a single object of key-value pairs. If type is "list", this is a list of strings.
+        {"column_1": "value_1", "column_2": "value_2", "column_3": "value_3"}
+      ]
     }
   ]
 }
 
-Rules for Extraction:
-1. Preserve all data exactly. Do NOT round numbers, convert currencies, recalculate values, translate text, or change decimal places.
-2. Ignore all document noise: headers, footers, page numbers, logos, signatures, watermarks, decorative lines.
-3. For tables: keep multi-word column names combined into a single key. If a header wraps multiple lines, merge it into a single clean string. Maintain original columns and row ordering.
-4. Return ONLY valid JSON matching the schema. No explanations, no markdown block fences (e.g. do not wrap in ```json), no preamble.
+Rules:
+1. EVERY table on the page must be a separate section with type "table".
+2. Preserve ALL data exactly — do NOT round numbers, convert currencies, translate text, or change decimal places.
+3. For tables: merge multi-word column names into a single key. Merge wrapped header lines into one string. Preserve original column order and row order.
+4. Include ALL rows, even if they look like subtotals, totals, notes, or continuation rows.
+5. If a table spans this page, include only what is visible on THIS page (merging across pages happens later).
+6. If NO table exists on this page, return {"sections": []}.
+7. Return ONLY valid JSON. No markdown fences, no explanations, no preamble.
 """
 
 def clean_json_text(text: str) -> str:
@@ -88,11 +93,18 @@ def extract_from_scanned_page(
     api_key: str,
     model: str
 ) -> Dict[str, Any]:
-    """Extract tables and data from a scanned page using its image representation."""
+    """Extract tables and data from a scanned page.
+
+    Strategy:
+    1. Try sending the page image directly to the multimodal LLM.
+    2. If the model rejects images, fall back to local OCR (pytesseract) to
+       get text, then send that text to the text-based extraction path.
+    """
+    image_bytes = page.render_to_png(dpi=150)
+
+    # --- attempt 1: image-based extraction ---
     try:
-        image_bytes = page.render_to_png(dpi=150)
         base64_image = encode_image_to_base64(image_bytes)
-        
         prompt_content = [
             {"type": "text", "text": DETECTION_PROMPT},
             {
@@ -104,8 +116,29 @@ def extract_from_scanned_page(
         ]
         return call_openrouter_extraction(prompt_content, api_key, model)
     except Exception as e:
-        logger.error(f"Failed to extract from scanned page {page.page_num}: {e}")
-        return {"sections": []}
+        logger.warning(f"Image extraction failed for page {page.page_num}: {e}")
+        error_str = str(e).lower()
+        image_not_supported = any(
+            kw in error_str
+            for kw in ("clipboard", "image", "cannot read", "not support")
+        )
+
+    # --- attempt 2: OCR → text-based extraction ---
+    try:
+        from pdf_extractor.ocr_engine import extract_text_with_local_tesseract
+        ocr_text = extract_text_with_local_tesseract(image_bytes)
+        if ocr_text:
+            logger.info(f"OCR succeeded for page {page.page_num}, retrying as digital page.")
+            return extract_from_digital_page(
+                PDFPage(text=ocr_text, page_num=page.page_num, is_scanned=False),
+                api_key,
+                model,
+            )
+    except Exception as ocr_err:
+        logger.error(f"OCR fallback failed for page {page.page_num}: {ocr_err}")
+
+    logger.error(f"All extraction methods failed for scanned page {page.page_num}")
+    return {"sections": []}
 
 def process_single_page(
     page: PDFPage,

@@ -37,6 +37,16 @@ except ImportError as exc:
     convert_from_bytes = None
     OCR_IMPORT_ERROR = exc
 
+try:
+    from pdf_extractor.pdf_parser import parse_pdf
+    from pdf_extractor.table_detector import process_all_pages_parallel, compile_and_merge_sections
+    TABLE_EXTRACTION_IMPORT_ERROR = None
+except ImportError as exc:
+    parse_pdf = None
+    process_all_pages_parallel = None
+    compile_and_merge_sections = None
+    TABLE_EXTRACTION_IMPORT_ERROR = exc
+
 
 def load_env_value(name: str) -> str:
     value = os.getenv(name, "").strip()
@@ -65,43 +75,58 @@ OPENROUTER_SITE_URL = os.getenv("OPENROUTER_SITE_URL", "http://localhost:8501").
 OPENROUTER_APP_NAME = os.getenv("OPENROUTER_APP_NAME", "PDF to Excel Extractor").strip() or "PDF to Excel Extractor"
 
 
-PROMPT = """Analyze this PDF and extract ALL data into a structured JSON object.
+ANALYST_PROMPT = """You are a senior data analyst.
+
+Read the full document, understand it end to end, and convert it into analyst-ready structured JSON for Excel export.
 
 Rules:
-1. Find every logical section: tables, fee lists, policies, contact info, dates, rates, etc.
-2. Name each section with a short snake_case key, for example: room_rates, cancellation_policy
-3. Tables -> list of dicts (one dict per row; keys = column headers in snake_case)
-4. Preserve table structure exactly:
-   - Do not split a multi-word column name into separate keys.
-   - If a header wraps onto multiple lines, combine it into one header string.
-   - Keep the original column count.
-   - Keep room names and rate labels exact, even if they are long.
-   - For example, "Cliffside Ocean Front" must stay one column, not "Cliffside" and "Ocean Front".
-5. Bullet lists -> list of strings
-6. Key-value pairs -> dict
-7. Plain text -> string
-8. Return ONLY valid JSON. No markdown fences, no explanation, no preamble.
+1. Extract only facts that are present in the PDF. Do not guess or invent values.
+2. Prefer normalized rows and tables over long prose.
+3. Use snake_case keys.
+4. Keep dates, prices, IDs, names, codes, and percentages exactly as written in the PDF.
+5. When you detect a table, return it as a list of dicts, one dict per row.
+6. Keep multi-word headers together. Do not split column names.
+7. If something is unknown, use an empty string, empty list, or empty object.
+8. Return ONLY valid JSON. No markdown fences, no explanations, no preamble.
 
-Example structure:
+Required top-level keys:
 {
-  "agreement_info": {"hotel": "Cala de Mar", "period": "Jan 2026 - Mar 2027"},
-  "room_rates": [
+  "document_summary": {
+    "document_type": "",
+    "document_title": "",
+    "purpose": "",
+    "parties": [],
+    "period": "",
+    "currency": "",
+    "location": "",
+    "high_level_summary": ""
+  },
+  "key_entities": [
+    {"entity_type": "", "entity_name": "", "details": "", "page_reference": ""}
+  ],
+  "important_dates": [
+    {"date": "", "event": "", "page_reference": ""}
+  ],
+  "financial_metrics": [
+    {"metric": "", "value": "", "unit": "", "context": "", "page_reference": ""}
+  ],
+  "tables": [
     {
-      "dates": "Jan 03 - Mar 31 2026",
-      "cliffside_ocean_front": "$320",
-      "romance_deluxe_ocean_front": "$450",
-      "family_adjoining": "$750",
-      "master_suite_penthouse": "$800"
+      "table_name": "",
+      "description": "",
+      "rows": [
+        {"column_one": "", "column_two": "", "page_reference": ""}
+      ]
     }
   ],
-  "extra_charges": [
-    {"item": "Extra Adult", "charge": "$100 USD"},
-    {"item": "Pet Fee", "charge": "$85 USD/night"}
+  "action_items": [
+    {"action": "", "priority": "", "owner": "", "page_reference": ""}
   ],
-  "promotions": ["Early Booking: 5% off if booked 45 days ahead", "4th Night Free"],
-  "cancellation_policy": {"deadline": "4 days before arrival", "penalty": "100% of total"},
-  "contact_info": {"phone": "+52 755 555 1100", "email": "reservations@calademar.com"}
-}"""
+  "notes": []
+}
+
+If a section is not present, return it as an empty list or empty object.
+"""
 
 PDF_TABLE_PROMPT = """Analyze this PDF and extract only the 3 main table-like sections in document order.
 
@@ -198,11 +223,113 @@ def extract_text_via_ocr(pdf_bytes: bytes) -> str:
     return "\n\n".join(parts)
 
 
+def compose_pdf_text_for_analysis(pdf_bytes: bytes) -> str:
+    """Add page markers so the model can reason over the full document more reliably."""
+    page_texts = extract_page_texts_from_pdf(pdf_bytes)
+    parts: list[str] = []
+    for index, page_text in enumerate(page_texts, start=1):
+        text = (page_text or "").strip()
+        if text:
+            parts.append(f"[[PAGE {index}]]\n{text}")
+    return "\n\n".join(parts)
+
+
 def strip_code_fences(text: str) -> str:
     raw = text.strip()
     if raw.startswith("```"):
         raw = "\n".join(line for line in raw.splitlines() if not line.strip().startswith("```")).strip()
     return raw
+
+
+def parse_json_like_value(value):
+    """Best-effort parsing for JSON that the model may have returned as a string."""
+    if isinstance(value, str):
+        candidate = strip_code_fences(value).strip()
+        if candidate.startswith("{") or candidate.startswith("["):
+            try:
+                return json.loads(candidate)
+            except Exception:
+                return value
+    return value
+
+
+def normalize_extracted_tables(extracted: dict) -> dict:
+    """Convert JSON-encoded table rows into real Python lists/dicts for Excel export."""
+    if not isinstance(extracted, dict):
+        return extracted
+
+    normalized = dict(extracted)
+    tables = normalized.get("tables")
+
+    if isinstance(tables, list):
+        cleaned_tables = []
+        for table in tables:
+            if not isinstance(table, dict):
+                cleaned_tables.append(parse_json_like_value(table))
+                continue
+
+            cleaned_table = dict(table)
+            rows = cleaned_table.get("rows")
+            parsed_rows = parse_json_like_value(rows)
+            if parsed_rows is not rows:
+                cleaned_table["rows"] = parsed_rows
+            cleaned_tables.append(cleaned_table)
+        normalized["tables"] = cleaned_tables
+    else:
+        normalized["tables"] = parse_json_like_value(tables)
+
+    for key, value in list(normalized.items()):
+        if key == "tables":
+            continue
+        parsed_value = parse_json_like_value(value)
+        if parsed_value is not value:
+            normalized[key] = parsed_value
+
+    return normalized
+
+
+def build_sources_from_detected_sections(sections: list[dict], raw_text: str) -> list[tuple[str, object]]:
+    """Convert detected PDF table sections into workbook sheets."""
+    sources: list[tuple[str, object]] = []
+    for index, section in enumerate(sections, start=1):
+        if not isinstance(section, dict):
+            continue
+
+        section_name = section.get("name") or f"section_{index}"
+        section_type = section.get("type", "table")
+        rows = section.get("rows", [])
+
+        if section_type == "table" and rows:
+            sources.append((sanitize_filename_fragment(str(section_name)), rows))
+        elif section_type == "key_value" and rows:
+            sources.append((sanitize_filename_fragment(str(section_name)), rows))
+        elif section_type == "list" and rows:
+            sources.append((sanitize_filename_fragment(str(section_name)), rows))
+
+    sources.append(("raw_pdf_text", split_text_for_excel(raw_text)))
+    return sources
+
+
+def extract_table_sections_from_pdf(pdf_bytes: bytes, progress_callback=None) -> list[dict] | None:
+    """Use the table-aware pdf_extractor pipeline to find and merge table sections."""
+    if parse_pdf is None or process_all_pages_parallel is None or compile_and_merge_sections is None:
+        return None
+    if not OPENROUTER_API_KEY:
+        return None
+
+    pages = parse_pdf(pdf_bytes)
+    if not pages:
+        return None
+
+    page_results = process_all_pages_parallel(
+        pages=pages,
+        api_key=OPENROUTER_API_KEY,
+        model=OPENROUTER_MODEL,
+        progress_callback=progress_callback,
+        max_workers=5,
+    )
+    merged_sections = compile_and_merge_sections(page_results)
+    return merged_sections or None
 
 
 def excel_safe_value(value):
@@ -671,13 +798,13 @@ def extract_cancel_rules_grid_from_pdf(pdf_bytes: bytes) -> list[dict] | None:
 
 
 def extract_data_with_openrouter(pdf_bytes: bytes) -> dict:
-    pdf_text = extract_text_from_pdf(pdf_bytes)
+    pdf_text = compose_pdf_text_for_analysis(pdf_bytes)
     if not pdf_text.strip():
         raise ValueError("Could not extract text from the PDF. Try a text-based PDF or OCR first.")
 
     prompt = (
-        f"{PROMPT}\n\n"
-        "The PDF text is below. Preserve tables as structured data when possible.\n\n"
+        f"{ANALYST_PROMPT}\n\n"
+        "The PDF text is below. Analyze the full document and structure the result for Excel export.\n\n"
         f"PDF TEXT:\n{pdf_text}"
     )
 
@@ -733,10 +860,21 @@ def extract_structured_data(pdf_bytes: bytes) -> dict:
     if not isinstance(extracted, dict):
         raise ValueError("OpenRouter did not return a JSON object.")
 
+    extracted = normalize_extracted_tables(extracted)
+
     rates_grid = extract_rates_grid_from_pdf(pdf_bytes)
     if rates_grid:
         extracted = dict(extracted)
-        extracted["rates_grid"] = rates_grid
+        tables = extracted.get("tables")
+        rates_table = {
+            "table_name": "rates_grid",
+            "description": "Auto-detected rate grid from the PDF structure.",
+            "rows": rates_grid,
+        }
+        if isinstance(tables, list):
+            extracted["tables"] = tables + [rates_table]
+        else:
+            extracted["tables"] = [rates_table]
 
     return extracted
 
@@ -1097,62 +1235,94 @@ def extract_data_in_steps(pdf_bytes: bytes) -> dict:
         result["error"] = "No text extracted from PDF. The file may be image-only."
         return result
 
-    reference_grids = load_cala_de_mar_reference_grids(pdf_bytes)
-    if not reference_grids:
-        reference_grids = load_casa_colonial_reference_grids(pdf_bytes)
-
-    if reference_grids:
-        result["step2_ai_json"] = reference_grids
-    else:
+    # Priority 1: Table-aware extraction — detect ALL tables in the PDF
+    table_sections = None
+    if TABLE_EXTRACTION_IMPORT_ERROR is None and OPENROUTER_API_KEY:
         try:
-            ai_json = extract_data_with_openrouter(pdf_bytes)
+            table_sections = extract_table_sections_from_pdf(pdf_bytes)
+        except Exception:
+            table_sections = None
+
+    if table_sections:
+        result["step2_ai_json"] = table_sections
+        result["step2_section_count"] = len(table_sections)
+        result["step2_total_rows"] = sum(
+            len(section.get("rows", [])) if isinstance(section.get("rows", []), list) else 0
+            for section in table_sections
+            if isinstance(section, dict)
+        )
+        try:
+            sources = build_sources_from_detected_sections(table_sections, step1_text)
+            result["step3_excel_bytes"] = build_excel_from_sources(sources)
         except Exception as exc:
-            error_msg = str(exc).lower()
-            if "clipboard" in error_msg or "image" in error_msg or "cannot read" in error_msg:
-                result["error"] = (
-                    "The AI model does not support image input. "
-                    "Please ensure your PDF contains text data (not just images). "
-                    "If the PDF is image-only, install OCR dependencies: "
-                    "`pip install pytesseract pdf2image` and Tesseract."
-                )
-            else:
-                result["error"] = str(exc)
+            result["error"] = f"Excel generation failed: {exc}"
             return result
+    else:
+        # Priority 2: Known reference grids (hotel-specific fallback)
+        reference_grids = load_cala_de_mar_reference_grids(pdf_bytes)
+        if not reference_grids:
+            reference_grids = load_casa_colonial_reference_grids(pdf_bytes)
 
-        if not isinstance(ai_json, dict):
-            result["error"] = "OpenRouter did not return a JSON object."
-            return result
+        if reference_grids:
+            result["step2_ai_json"] = reference_grids
+            extracted = result["step2_ai_json"]
+            result["step2_section_count"] = len(extracted)
+            result["step2_total_rows"] = sum(
+                len(v) if isinstance(v, list) else (len(v) if isinstance(v, dict) else 1)
+                for v in extracted.values()
+            )
+            try:
+                sources = build_analyst_workbook_sources(extracted, step1_text)
+                result["step3_excel_bytes"] = build_excel_from_sources(sources)
+            except Exception as exc:
+                result["error"] = f"Excel generation failed: {exc}"
+                return result
+        else:
+            # Priority 3: Generic AI extraction (final fallback)
+            try:
+                ai_json = extract_data_with_openrouter(pdf_bytes)
+            except Exception as exc:
+                error_msg = str(exc).lower()
+                if "clipboard" in error_msg or "image" in error_msg or "cannot read" in error_msg:
+                    result["error"] = (
+                        "The AI model does not support image input. "
+                        "Please ensure your PDF contains text data (not just images). "
+                        "If the PDF is image-only, install OCR dependencies: "
+                        "`pip install pytesseract pdf2image` and Tesseract."
+                    )
+                else:
+                    result["error"] = str(exc)
+                return result
 
-        rates_grid = extract_rates_grid_from_pdf(pdf_bytes)
-        if rates_grid:
-            ai_json = dict(ai_json)
-            ai_json["rates_grid"] = rates_grid
+            if not isinstance(ai_json, dict):
+                result["error"] = "OpenRouter did not return a JSON object."
+                return result
 
-        result["step2_ai_json"] = ai_json
+            rates_grid = extract_rates_grid_from_pdf(pdf_bytes)
+            if rates_grid:
+                ai_json = dict(ai_json)
+                ai_json["rates_grid"] = rates_grid
 
-    extracted = result["step2_ai_json"]
-    result["step2_section_count"] = len(extracted)
-    result["step2_total_rows"] = sum(
-        len(v) if isinstance(v, list) else (len(v) if isinstance(v, dict) else 1)
-        for v in extracted.values()
-    )
+            ai_json = normalize_extracted_tables(ai_json)
+            result["step2_ai_json"] = ai_json
+            result["step2_section_count"] = len(ai_json)
+            result["step2_total_rows"] = sum(
+                len(v) if isinstance(v, list) else (len(v) if isinstance(v, dict) else 1)
+                for v in ai_json.values()
+            )
 
-    try:
-        # Preserve the original PDF text in the workbook so the export keeps a
-        # lossless source copy alongside the structured JSON extraction.
-        sources = [
-            ("raw_pdf_text", split_text_for_excel(step1_text)),
-            ("debug", extracted),
-        ]
-        result["step3_excel_bytes"] = build_excel_from_sources(sources)
-    except Exception as exc:
-        result["error"] = f"Excel generation failed: {exc}"
-        return result
+            try:
+                sources = build_analyst_workbook_sources(ai_json, step1_text)
+                result["step3_excel_bytes"] = build_excel_from_sources(sources)
+            except Exception as exc:
+                result["error"] = f"Excel generation failed: {exc}"
+                return result
 
     excel_info = analyze_excel(result["step3_excel_bytes"])
     result["excel_analysis"] = excel_info
 
-    validation = validate_extraction(pdf_info, excel_info, extracted)
+    validation_source = result["step2_ai_json"]
+    validation = validate_extraction(pdf_info, excel_info, validation_source)
     result["validation_report"] = validation
     result["data_loss_pct"] = validation["data_loss_pct"]
 
@@ -1383,15 +1553,54 @@ def build_zip_of_excels(files: list[tuple[str, bytes]]) -> bytes:
     return buffer.getvalue()
 
 
+def build_analyst_workbook_sources(analysis: dict, raw_text: str) -> list[tuple[str, object]]:
+    """Flatten the model output into workbook-friendly sheet sources."""
+    if not isinstance(analysis, dict):
+        return [("raw_pdf_text", split_text_for_excel(raw_text))]
+
+    sources: list[tuple[str, object]] = []
+    has_structured_output = False
+
+    tables = analysis.get("tables")
+    if isinstance(tables, list):
+        for index, table in enumerate(tables, start=1):
+            if not isinstance(table, dict):
+                sources.append((f"table_{index}", table))
+                has_structured_output = True
+                continue
+
+            table_name = table.get("table_name") or table.get("name") or f"table_{index}"
+            rows = table.get("rows")
+
+            if rows:
+                sources.append((sanitize_filename_fragment(table_name), rows))
+                has_structured_output = True
+    elif isinstance(tables, dict):
+        for table_name, rows in tables.items():
+            if rows:
+                sources.append((sanitize_filename_fragment(str(table_name)), rows))
+                has_structured_output = True
+
+    summary = analysis.get("document_summary")
+    if summary:
+        sources.append(("executive_summary", summary))
+        has_structured_output = True
+
+    # Always keep the source text so the workbook stays lossless and validation can
+    # confirm zero data loss even when structured sheets are present.
+    sources.append(("raw_pdf_text", split_text_for_excel(raw_text)))
+    return sources
+
+
 def main():
     st.set_page_config(page_title="PDF to Excel Extractor", page_icon="PDF", layout="centered")
-    st.title("PDF to Excel Extractor")
-    st.markdown("Upload a PDF and extract structured data into a clean Excel file.")
-    st.info("Step 1: Upload your PDF or CSV. Step 2: Extract all data. Step 3: Download the Excel file.")
+    st.title("PDF Analyst to Excel")
+    st.markdown("Upload a PDF and let the AI read the full document, extract the important facts, and build an Excel workbook.")
+    st.info("Step 1: Upload your PDF or CSV. Step 2: Run analyst extraction. Step 3: Download the Excel workbook.")
 
     with st.sidebar:
         st.header("How it works")
-        st.markdown("1. Upload your file\n2. Extract all data\n3. Download the Excel file")
+        st.markdown("1. Upload your file\n2. AI reads and analyzes the document\n3. Download the Excel workbook")
         st.markdown("---")
         st.caption(f"Model: `{OPENROUTER_MODEL}`")
 
@@ -1412,7 +1621,7 @@ def main():
         for uploaded_file in uploaded_files:
             st.info(f"{uploaded_file.name} - {uploaded_file.size / 1024:.1f} KB")
 
-        if st.button("Extract all data", type="primary", use_container_width=True):
+        if st.button("Run analyst extraction", type="primary", use_container_width=True):
             pdf_files = [file for file in uploaded_files if file.name.lower().endswith(".pdf")]
             csv_files = [file for file in uploaded_files if file.name.lower().endswith(".csv")]
             total_sources = len(pdf_files) + len(csv_files)
@@ -1526,7 +1735,15 @@ def main():
                     st.warning(f"Data loss: {vr['data_loss_pct']}% - Review issues before downloading")
 
                 sources.append((f"{pdf_base}_raw_text", split_text_for_excel(result["step1_raw_text"])))
-                sources.append((pdf_base, result["step2_ai_json"]))
+                ai_data = result["step2_ai_json"]
+                if isinstance(ai_data, list) and ai_data and isinstance(ai_data[0], dict) and "rows" in ai_data[0]:
+                    for section in ai_data:
+                        sec_name = section.get("name", "section")
+                        sec_rows = section.get("rows", [])
+                        if sec_rows:
+                            sources.append((f"{pdf_base} - {sanitize_filename_fragment(sec_name)}", sec_rows))
+                else:
+                    sources.append((pdf_base, ai_data))
                 completed_sources += 1
                 percent_complete = int((completed_sources / total_sources) * 100) if total_sources else 100
                 progress_bar.progress(percent_complete / 100)

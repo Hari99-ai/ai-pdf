@@ -11,7 +11,7 @@ def homepage():
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>PDF to Excel Extractor</title>
+    <title>PDF Analyst to Excel</title>
     <style>
       body {
         font-family: Arial, sans-serif;
@@ -40,18 +40,18 @@ def homepage():
   </head>
   <body>
     <div class="card">
-      <h1>PDF to Excel Extractor</h1>
+      <h1>PDF Analyst to Excel</h1>
       <p>
-        This deployment entrypoint exists for Vercel. The Streamlit app lives in
-        <code>pdf_to_excel.py</code> and should be run locally.
+        This deployment entrypoint exists for Vercel. The Streamlit analyst app
+        lives in <code>pdf_to_excel.py</code> and should be run locally.
       </p>
       <p>
         Local command:
         <code>python -m streamlit run pdf_to_excel.py</code>
       </p>
       <p>
-        If you want the full PDF extractor on Vercel, the Streamlit UI must be
-        rewritten into a normal web app.
+        If you want the full analyst workflow on Vercel, the Streamlit UI must
+        be rewritten into a normal web app.
       </p>
     </div>
   </body>

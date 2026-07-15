@@ -1174,3 +1174,10 @@
 [2026-07-15 10:47:41] [INFO] [table_detector.py:166]: Removing repeated header row: {'a': 'DATES', 'b': 'Cliffside Ocean Front', 'c': 'Romance Deluxe Ocean Front'}
 [2026-07-15 10:47:41] [INFO] [table_detector.py:209]: Merging consecutive tables: 'rates_page_1' and 'rates_page_2'
 [2026-07-15 10:47:41] [INFO] [table_detector.py:209]: Merging consecutive tables: 'policy_page_1' and 'policy_page_2'
+[2026-07-15 14:17:18] [INFO] [pdf_parser.py:20]: Opening PDF from bytes...
+[2026-07-15 14:17:18] [INFO] [pdf_parser.py:23]: PDF opened successfully. Total pages: 1
+[2026-07-15 14:17:18] [INFO] [table_detector.py:135]: Beginning parallel page extraction with 5 workers...
+[2026-07-15 14:17:18] [INFO] [table_detector.py:116]: Starting page 1 processing (Scanned=False)...
+[2026-07-15 14:17:50] [INFO] [table_detector.py:121]: Finished page 1 processing. Found 4 sections.
+[2026-07-15 14:17:50] [INFO] [table_detector.py:251]: Total sections extracted before merging: 4
+[2026-07-15 14:17:50] [INFO] [table_detector.py:253]: Total sections after merging: 4
