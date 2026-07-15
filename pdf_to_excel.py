@@ -1247,14 +1247,27 @@ def extract_data_in_steps(pdf_bytes: bytes) -> dict:
     result["pdf_analysis"] = pdf_info
 
     step1_text = extract_text_from_pdf(pdf_bytes)
+
+    # If pypdf+OCR returned nothing, try PyMuPDF as a second attempt
+    if not step1_text.strip():
+        try:
+            import fitz as _fitz
+            _doc = _fitz.open(stream=pdf_bytes, filetype="pdf")
+            _parts = []
+            for _page in _doc:
+                _t = _page.get_text().strip()
+                if _t:
+                    _parts.append(_t)
+            if _parts:
+                step1_text = "\n\n".join(_parts)
+        except Exception:
+            pass
+
     result["step1_raw_text"] = step1_text
     result["step1_char_count"] = len(step1_text)
 
-    if not step1_text.strip():
-        result["error"] = "No text extracted from PDF. The file may be image-only."
-        return result
-
     # Priority 1: Table-aware extraction — detect ALL tables in the PDF
+    # This path supports image-only PDFs via multimodal LLM (sends page images).
     table_sections = None
     if TABLE_EXTRACTION_IMPORT_ERROR is None and OPENROUTER_API_KEY:
         try:
@@ -1298,6 +1311,15 @@ def extract_data_in_steps(pdf_bytes: bytes) -> dict:
                 return result
         else:
             # Priority 3: Generic AI extraction (final fallback)
+            if not step1_text.strip():
+                result["error"] = (
+                    "Could not extract data from this PDF. "
+                    "The document appears to be image-based and the table detection "
+                    "could not process it. Ensure your OpenRouter API key is valid "
+                    "and the model supports image input (e.g. gpt-4o)."
+                )
+                return result
+
             try:
                 ai_json = extract_data_with_openrouter(pdf_bytes)
             except Exception as exc:
@@ -1306,8 +1328,8 @@ def extract_data_in_steps(pdf_bytes: bytes) -> dict:
                     result["error"] = (
                         "The AI model does not support image input. "
                         "Please ensure your PDF contains text data (not just images). "
-                        "If the PDF is image-only, install OCR dependencies: "
-                        "`pip install pytesseract pdf2image` and Tesseract."
+                        "For image-only PDFs, use a model that supports image input "
+                        "(e.g. gpt-4o via OpenRouter)."
                     )
                 else:
                     result["error"] = str(exc)
