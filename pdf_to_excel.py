@@ -39,12 +39,14 @@ except ImportError as exc:
 
 try:
     from pdf_extractor.pdf_parser import parse_pdf
-    from pdf_extractor.table_detector import process_all_pages_parallel, compile_and_merge_sections
+    from pdf_extractor.table_detector import process_all_pages_sequential, compile_and_merge_sections
+    from pdf_extractor.logging_config import logger
     TABLE_EXTRACTION_IMPORT_ERROR = None
 except ImportError as exc:
     parse_pdf = None
-    process_all_pages_parallel = None
+    process_all_pages_sequential = None
     compile_and_merge_sections = None
+    logger = None
     TABLE_EXTRACTION_IMPORT_ERROR = exc
 
 
@@ -318,9 +320,14 @@ def build_sources_from_detected_sections(sections: list[dict], raw_text: str) ->
     return sources
 
 
-def extract_table_sections_from_pdf(pdf_bytes: bytes, progress_callback=None) -> list[dict] | None:
-    """Use the table-aware pdf_extractor pipeline to find and merge table sections."""
-    if parse_pdf is None or process_all_pages_parallel is None or compile_and_merge_sections is None:
+def extract_table_sections_from_pdf(pdf_bytes: bytes, progress_callback=None, chunk_size: int = 15) -> list[dict] | None:
+    """Use the table-aware pdf_extractor pipeline to find and merge table sections.
+
+    Supports chunked processing for large PDFs: pages are split into groups of
+    ``chunk_size`` (default 15) and processed separately, then merged.
+    Set chunk_size to 0 to disable chunking.
+    """
+    if parse_pdf is None or process_all_pages_sequential is None or compile_and_merge_sections is None:
         return None
     if not OPENROUTER_API_KEY:
         return None
@@ -329,14 +336,83 @@ def extract_table_sections_from_pdf(pdf_bytes: bytes, progress_callback=None) ->
     if not pages:
         return None
 
-    page_results = process_all_pages_parallel(
-        pages=pages,
-        api_key=OPENROUTER_API_KEY,
-        model=OPENROUTER_MODEL,
-        progress_callback=progress_callback,
-        max_workers=5,
-    )
-    merged_sections = compile_and_merge_sections(page_results)
+    total_pages = len(pages)
+    use_chunking = chunk_size > 0 and total_pages > chunk_size
+
+    if use_chunking:
+        chunks = [pages[i:i + chunk_size] for i in range(0, total_pages, chunk_size)]
+        if logger:
+            logger.info(f"Split {total_pages} pages into {len(chunks)} chunks of up to {chunk_size} pages.")
+
+        all_page_results = []
+        chunk_context_history = []
+
+        for chunk_idx, chunk_pages in enumerate(chunks):
+            chunk_start = chunk_pages[0].page_num
+            chunk_end = chunk_pages[-1].page_num
+            chunk_num = chunk_idx + 1
+            total_chunks = len(chunks)
+
+            if logger:
+                logger.info(
+                    f"Processing chunk {chunk_num}/{total_chunks} "
+                    f"(pages {chunk_start}-{chunk_end}, {len(chunk_pages)} pages)..."
+                )
+
+            if progress_callback:
+                pct = int((chunk_idx / total_chunks) * 80)
+                progress_callback(pct, 100, f"Chunk {chunk_num}/{total_chunks}: pages {chunk_start}-{chunk_end}...")
+
+            chunk_previous_context = "\n".join(chunk_context_history) if chunk_context_history else ""
+
+            chunk_results = process_all_pages_sequential(
+                pages=chunk_pages,
+                api_key=OPENROUTER_API_KEY,
+                model=OPENROUTER_MODEL,
+                previous_context=chunk_previous_context,
+                progress_callback=None,
+            )
+
+            all_page_results.extend(chunk_results)
+
+            # Build compact context summary for the next chunk
+            section_names = []
+            total_rows = 0
+            for page_res in chunk_results:
+                for sec in page_res.get("sections", []):
+                    section_names.append(sec.get("name", "unknown"))
+                    rows = sec.get("rows", [])
+                    if isinstance(rows, list):
+                        total_rows += len(rows)
+
+            unique_names = list(dict.fromkeys(section_names))
+            if unique_names:
+                names_str = ", ".join(unique_names[:10])
+                if len(unique_names) > 10:
+                    names_str += f" (+{len(unique_names) - 10} more)"
+                summary = f"Pages {chunk_start}-{chunk_end}: {total_rows} rows from sections: [{names_str}]"
+            else:
+                summary = f"Pages {chunk_start}-{chunk_end}: No tables found."
+
+            chunk_context_history.append(summary)
+            if len(chunk_context_history) > 1:
+                compact = f"Previously processed {len(chunk_context_history) - 1} chunk(s): "
+                compact += "; ".join(chunk_context_history[:-1])
+                chunk_context_history = [compact, chunk_context_history[-1]]
+
+        if progress_callback:
+            progress_callback(82, 100, "All chunks processed. Merging cross-chunk tables...")
+
+        merged_sections = compile_and_merge_sections(all_page_results)
+    else:
+        page_results = process_all_pages_sequential(
+            pages=pages,
+            api_key=OPENROUTER_API_KEY,
+            model=OPENROUTER_MODEL,
+            progress_callback=progress_callback,
+        )
+        merged_sections = compile_and_merge_sections(page_results)
+
     return merged_sections or None
 
 
@@ -1228,7 +1304,7 @@ def validate_extraction(pdf_info: dict, excel_info: dict, extracted_json) -> dic
     return report
 
 
-def extract_data_in_steps(pdf_bytes: bytes) -> dict:
+def extract_data_in_steps(pdf_bytes: bytes, chunk_size: int = 15) -> dict:
     result = {
         "step1_raw_text": "",
         "step2_ai_json": None,
@@ -1271,7 +1347,7 @@ def extract_data_in_steps(pdf_bytes: bytes) -> dict:
     table_sections = None
     if TABLE_EXTRACTION_IMPORT_ERROR is None and OPENROUTER_API_KEY:
         try:
-            table_sections = extract_table_sections_from_pdf(pdf_bytes)
+            table_sections = extract_table_sections_from_pdf(pdf_bytes, chunk_size=chunk_size)
         except Exception:
             table_sections = None
 
@@ -1663,6 +1739,17 @@ def main():
         st.markdown("1. Upload your file\n2. AI reads and analyzes the document\n3. Download the Excel workbook")
         st.markdown("---")
         st.caption(f"Model: `{OPENROUTER_MODEL}`")
+        st.markdown("---")
+        chunk_size = st.slider(
+            "Pages per chunk",
+            min_value=5,
+            max_value=50,
+            value=15,
+            step=5,
+            help="Pages are processed in groups of this size. "
+                 "Larger values use more API context; smaller values are faster "
+                 "but may lose cross-page context."
+        )
 
     uploaded_files = st.file_uploader("Upload PDFs or CSVs", type=["pdf", "csv"], accept_multiple_files=True)
 
@@ -1709,7 +1796,7 @@ def main():
                 pdf_base = Path(pdf_file.name).stem
                 with st.spinner(f"Extracting and validating {pdf_file.name}..."):
                     progress_text.info(f"Extracting {pdf_file.name}...")
-                    result = extract_data_in_steps(pdf_bytes)
+                    result = extract_data_in_steps(pdf_bytes, chunk_size=chunk_size)
 
                 if result["error"]:
                     st.error(f"Error extracting {pdf_file.name}: {result['error']}")

@@ -36,6 +36,41 @@ Rules:
 8. IMPORTANT: Every row MUST include a "context" field with a brief, one-line explanation of what the row data means (e.g., "Rate per night for oceanfront room", "Seasonal pricing for holiday period", "Extra person charge"). This helps users understand the data at a glance.
 """
 
+DETECTION_PROMPT_WITH_CONTEXT = """You are a table extraction engine processing a multi-page document sequentially. You are currently viewing PAGE {current_page} of {total_pages}.
+
+You have already extracted data from previous pages. Here is a summary of what was found so far:
+{previous_context}
+
+CRITICAL: Detect every single table, grid, matrix, rate sheet, schedule, price list, fee schedule, comparison chart, and any data arranged in rows and columns — even if it has no visible borders. If data is aligned in columns, treat it as a table.
+
+IMPORTANT: If this page continues a table from a previous page, use the same section name and headers to enable proper merging. For example, if "rates_grid" was started on page 1 and continues on page 2, use the same name "rates_grid" and matching headers.
+
+Output Schema:
+{
+  "sections": [
+    {
+      "name": "descriptive_table_name_in_snake_case",
+      "type": "table",
+      "headers": ["column_1", "column_2", "column_3", "context"],
+      "rows": [
+        {"column_1": "value_1", "column_2": "value_2", "column_3": "value_3", "context": "Brief explanation of what this row represents"}
+      ]
+    }
+  ]
+}
+
+Rules:
+1. EVERY table on the page must be a separate section with type "table".
+2. Preserve ALL data exactly — do NOT round numbers, convert currencies, translate text, or change decimal places.
+3. For tables: merge multi-word column names into a single key. Merge wrapped header lines into one string. Preserve original column order and row order.
+4. Include ALL rows, even if they look like subtotals, totals, notes, or continuation rows.
+5. If a table spans this page, include only what is visible on THIS page (merging across pages happens later).
+6. If NO table exists on this page, return {"sections": []}.
+7. Return ONLY valid JSON. No markdown fences, no explanations, no preamble.
+8. IMPORTANT: Every row MUST include a "context" field with a brief, one-line explanation of what the row data means (e.g., "Rate per night for oceanfront room", "Seasonal pricing for holiday period", "Extra person charge"). This helps users understand the data at a glance.
+9. Use the previous context to maintain consistency in naming, headers, and data formatting across pages.
+"""
+
 def clean_json_text(text: str) -> str:
     """Clean the raw LLM response to get pure JSON."""
     raw = text.strip()
@@ -75,11 +110,23 @@ def call_openrouter_extraction(
 def extract_from_digital_page(
     page: PDFPage,
     api_key: str,
-    model: str
+    model: str,
+    previous_context: str = "",
+    current_page: int = 1,
+    total_pages: int = 1
 ) -> Dict[str, Any]:
     """Extract tables and data from a digital page using its text content."""
+    if previous_context:
+        prompt_text = DETECTION_PROMPT_WITH_CONTEXT.format(
+            current_page=current_page,
+            total_pages=total_pages,
+            previous_context=previous_context
+        )
+    else:
+        prompt_text = DETECTION_PROMPT
+
     prompt_content = [
-        {"type": "text", "text": DETECTION_PROMPT},
+        {"type": "text", "text": prompt_text},
         {"type": "text", "text": f"PAGE TEXT:\n{page.text}"}
     ]
     try:
@@ -92,7 +139,10 @@ def extract_from_digital_page(
 def extract_from_scanned_page(
     page: PDFPage,
     api_key: str,
-    model: str
+    model: str,
+    previous_context: str = "",
+    current_page: int = 1,
+    total_pages: int = 1
 ) -> Dict[str, Any]:
     """Extract tables and data from a scanned page.
 
@@ -106,8 +156,17 @@ def extract_from_scanned_page(
     # --- attempt 1: image-based extraction ---
     try:
         base64_image = encode_image_to_base64(image_bytes)
+        if previous_context:
+            prompt_text = DETECTION_PROMPT_WITH_CONTEXT.format(
+                current_page=current_page,
+                total_pages=total_pages,
+                previous_context=previous_context
+            )
+        else:
+            prompt_text = DETECTION_PROMPT
+
         prompt_content = [
-            {"type": "text", "text": DETECTION_PROMPT},
+            {"type": "text", "text": prompt_text},
             {
                 "type": "image_url",
                 "image_url": {
@@ -134,6 +193,9 @@ def extract_from_scanned_page(
                 PDFPage(text=ocr_text, page_num=page.page_num, is_scanned=False),
                 api_key,
                 model,
+                previous_context,
+                current_page,
+                total_pages
             )
     except Exception as ocr_err:
         logger.error(f"OCR fallback failed for page {page.page_num}: {ocr_err}")
@@ -144,14 +206,17 @@ def extract_from_scanned_page(
 def process_single_page(
     page: PDFPage,
     api_key: str,
-    model: str
+    model: str,
+    previous_context: str = "",
+    current_page: int = 1,
+    total_pages: int = 1
 ) -> Tuple[int, Dict[str, Any]]:
     """Process a single page (either digital or scanned) and return page index and sections."""
     logger.info(f"Starting page {page.page_num} processing (Scanned={page.is_scanned})...")
     if page.is_scanned:
-        result = extract_from_scanned_page(page, api_key, model)
+        result = extract_from_scanned_page(page, api_key, model, previous_context, current_page, total_pages)
     else:
-        result = extract_from_digital_page(page, api_key, model)
+        result = extract_from_digital_page(page, api_key, model, previous_context, current_page, total_pages)
     logger.info(f"Finished page {page.page_num} processing. Found {len(result.get('sections', []))} sections.")
     return page.page_num, result
 
@@ -184,6 +249,93 @@ def process_all_pages_parallel(
     # Sort results by page number to preserve document order
     sorted_results = [results_dict[i] for i in range(1, total_pages + 1)]
     return sorted_results
+
+def build_context_summary(sections: List[Dict[str, Any]], page_num: int) -> str:
+    """Build a concise summary of extracted sections from a page for context passing."""
+    if not sections:
+        return f"Page {page_num}: No tables found."
+
+    summary_parts = []
+    for sec in sections:
+        name = sec.get("name", "unknown")
+        sec_type = sec.get("type", "table")
+        headers = sec.get("headers", [])
+        rows = sec.get("rows", [])
+        row_count = len(rows) if isinstance(rows, list) else 0
+
+        header_str = ", ".join(headers[:5]) if headers else "no headers"
+        if len(headers) > 5:
+            header_str += f" (+{len(headers) - 5} more)"
+
+        summary_parts.append(
+            f"- Section '{name}' ({sec_type}): {row_count} rows, headers: [{header_str}]"
+        )
+
+    return f"Page {page_num}:\n" + "\n".join(summary_parts)
+
+def process_all_pages_sequential(
+    pages: List[PDFPage],
+    api_key: str,
+    model: str,
+    progress_callback=None,
+    previous_context: str = "",
+) -> List[Dict[str, Any]]:
+    """Extract data from all pages sequentially, passing context from each page to the next.
+
+    This approach improves extraction quality for multi-page documents by providing
+    the LLM with a summary of what was found on previous pages, enabling it to:
+    - Maintain consistent naming for tables that span multiple pages
+    - Use matching headers for proper merging
+    - Understand the document structure and flow
+
+    Args:
+        previous_context: Optional context string from processing earlier pages
+            (e.g. from a previous chunk). This is injected into the context
+            history so the first page of this batch has awareness of prior extractions.
+    """
+    total_pages = len(pages)
+    results = []
+    context_history = []
+
+    # Seed context history with any prior context from previous chunks
+    if previous_context:
+        context_history.append(previous_context)
+
+    logger.info(f"Beginning sequential page extraction for {total_pages} pages...")
+    for idx, page in enumerate(pages):
+        current_page = idx + 1
+        ctx = "\n".join(context_history) if context_history else ""
+
+        logger.info(f"Processing page {current_page}/{total_pages} (Scanned={page.is_scanned})...")
+        page_num, result = process_single_page(
+            page, api_key, model, ctx, current_page, total_pages
+        )
+        results.append(result)
+
+        # Build context summary for the next page
+        sections = result.get("sections", [])
+        summary = build_context_summary(sections, current_page)
+        context_history.append(summary)
+
+        # Keep context manageable - only keep last 3 pages of detailed context
+        if len(context_history) > 3:
+            # Summarize older pages into a compact form
+            older = context_history[:-3]
+            compact = f"Previously extracted: {len(older)} pages with tables from sections: "
+            compact += ", ".join(
+                sec.get("name", "?")
+                for older_page_summary in older
+                for line in older_page_summary.split("\n")
+                if line.startswith("- Section ")
+                for sec in [{"name": line.split("'")[1] if "'" in line else "unknown"}]
+            )
+            context_history = [compact] + context_history[-3:]
+
+        if progress_callback:
+            progress_callback(current_page, total_pages, f"Extracted page {current_page}/{total_pages}")
+
+    logger.info(f"Sequential extraction complete. Processed {total_pages} pages.")
+    return results
 
 def clean_repeated_headers(rows: List[Dict[str, Any]], headers: List[str]) -> List[Dict[str, Any]]:
     """Detect and remove rows that contain duplicate headers (e.g. repeated table headers on page breaks)."""
