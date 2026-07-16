@@ -1519,3 +1519,77 @@
 [2026-07-16 10:18:47] [INFO] [table_detector.py:352]: Removing repeated header row: {'a': 'DATES', 'b': 'Cliffside Ocean Front', 'c': 'Romance Deluxe Ocean Front'}
 [2026-07-16 10:18:47] [INFO] [table_detector.py:395]: Merging consecutive tables: 'rates_page_1' and 'rates_page_2'
 [2026-07-16 10:18:47] [INFO] [table_detector.py:395]: Merging consecutive tables: 'policy_page_1' and 'policy_page_2'
+[2026-07-16 10:19:41] [INFO] [pdf_parser.py:20]: Opening PDF from bytes...
+[2026-07-16 10:19:41] [INFO] [pdf_parser.py:23]: PDF opened successfully. Total pages: 1
+[2026-07-16 10:19:41] [INFO] [table_detector.py:294]: Beginning sequential page extraction for 1 pages...
+[2026-07-16 10:19:41] [INFO] [table_detector.py:299]: Processing page 1/1 (Scanned=False)...
+[2026-07-16 10:19:41] [INFO] [table_detector.py:215]: Starting page 1 processing (Scanned=False)...
+[2026-07-16 10:20:34] [INFO] [table_detector.py:220]: Finished page 1 processing. Found 3 sections.
+[2026-07-16 10:20:34] [INFO] [table_detector.py:327]: Sequential extraction complete. Processed 1 pages.
+[2026-07-16 10:20:34] [INFO] [table_detector.py:427]: Total sections extracted before merging: 3
+[2026-07-16 10:20:34] [INFO] [table_detector.py:429]: Total sections after merging: 3
+[2026-07-16 10:29:35] [INFO] [table_detector.py:352]: Removing repeated header row: {'a': 'DATES', 'b': 'Cliffside Ocean Front', 'c': 'Romance Deluxe Ocean Front'}
+[2026-07-16 10:29:35] [INFO] [table_detector.py:395]: Merging consecutive tables: 'rates_page_1' and 'rates_page_2'
+[2026-07-16 10:29:35] [INFO] [table_detector.py:395]: Merging consecutive tables: 'policy_page_1' and 'policy_page_2'
+[2026-07-16 10:29:50] [INFO] [excel_generator.py:284]: Detected pipe-delimited table with 4 rows.
+[2026-07-16 10:29:50] [INFO] [excel_generator.py:301]: Detected key-value table with 3 rows.
+[2026-07-16 10:29:50] [INFO] [excel_generator.py:305]: No structured pattern detected; using single-column fallback.
+[2026-07-16 10:30:14] [INFO] [excel_generator.py:315]: Initializing openpyxl Workbook...
+[2026-07-16 10:30:14] [INFO] [excel_generator.py:428]: Added Excel Table 'Rates' for range A1:B2.
+[2026-07-16 10:30:14] [INFO] [excel_generator.py:339]: No data for sheet 'Services', creating placeholder row.
+[2026-07-16 10:30:14] [INFO] [excel_generator.py:428]: Added Excel Table 'Services' for range A1:A2.
+[2026-07-16 10:30:14] [INFO] [excel_generator.py:339]: No data for sheet 'Policies', creating placeholder row.
+[2026-07-16 10:30:14] [INFO] [excel_generator.py:428]: Added Excel Table 'Policies' for range A1:A2.
+[2026-07-16 10:30:14] [INFO] [excel_generator.py:446]: Building Raw PDF Text sheet from raw extracted text...
+[2026-07-16 10:30:14] [INFO] [excel_generator.py:301]: Detected key-value table with 2 rows.
+[2026-07-16 10:30:14] [INFO] [excel_generator.py:506]: Raw PDF Text sheet: 2 rows, 2 columns.
+[2026-07-16 10:30:14] [INFO] [excel_generator.py:508]: Workbook generation finished.
+[2026-07-16 10:31:41] [INFO] [pdf_parser.py:20]: Opening PDF from bytes...
+[2026-07-16 10:31:41] [INFO] [pdf_parser.py:23]: PDF opened successfully. Total pages: 1
+[2026-07-16 10:31:41] [INFO] [table_detector.py:304]: Beginning sequential page extraction for 1 pages...
+[2026-07-16 10:31:41] [INFO] [table_detector.py:309]: Processing page 1/1 (Scanned=False)...
+[2026-07-16 10:31:41] [INFO] [table_detector.py:215]: Starting page 1 processing (Scanned=False)...
+[2026-07-16 10:32:40] [INFO] [table_detector.py:220]: Finished page 1 processing. Found 3 sections.
+[2026-07-16 10:32:40] [INFO] [table_detector.py:337]: Sequential extraction complete. Processed 1 pages.
+[2026-07-16 10:32:40] [INFO] [table_detector.py:437]: Total sections extracted before merging: 3
+[2026-07-16 10:32:40] [INFO] [table_detector.py:439]: Total sections after merging: 3
+[2026-07-16 10:32:40] [INFO] [excel_generator.py:293]: Detected space-aligned table with 5 rows and 2 columns.
+[2026-07-16 10:45:00] [INFO] [table_detector.py:513]: Removing repeated header row: {'a': 'DATES', 'b': 'Cliffside Ocean Front', 'c': 'Romance Deluxe Ocean Front'}
+[2026-07-16 10:45:00] [INFO] [table_detector.py:615]: Merging consecutive tables: 'rates_page_1' and 'rates_page_2'
+[2026-07-16 10:45:00] [INFO] [table_detector.py:615]: Merging consecutive tables: 'policy_page_1' and 'policy_page_2'
+[2026-07-16 10:46:45] [WARNING] [table_detector.py:232]: All JSON repair attempts failed. Returning original.
+[2026-07-16 10:46:45] [WARNING] [table_detector.py:232]: All JSON repair attempts failed. Returning original.
+[2026-07-16 10:46:45] [INFO] [table_detector.py:549]: Rejecting merge: hierarchy mismatch on 'season' ('high' vs 'low')
+[2026-07-16 10:46:45] [INFO] [table_detector.py:612]: Rejecting merge of 'rates' and 'rates' due to hierarchy mismatch
+[2026-07-16 10:46:45] [INFO] [table_detector.py:615]: Merging consecutive tables: 'rates' and 'rates'
+[2026-07-16 10:46:45] [INFO] [table_detector.py:549]: Rejecting merge: hierarchy mismatch on 'season' ('high' vs 'low')
+[2026-07-16 10:47:34] [INFO] [table_detector.py:215]: Successfully repaired truncated JSON with closer ']}]}'.
+[2026-07-16 10:47:34] [WARNING] [table_detector.py:241]: All JSON repair attempts failed. Returning original.
+[2026-07-16 10:47:34] [INFO] [table_detector.py:558]: Rejecting merge: hierarchy mismatch on 'season' ('high' vs 'low')
+[2026-07-16 10:47:34] [INFO] [table_detector.py:621]: Rejecting merge of 'rates' and 'rates' due to hierarchy mismatch
+[2026-07-16 10:47:34] [INFO] [table_detector.py:624]: Merging consecutive tables: 'rates' and 'rates'
+[2026-07-16 10:47:34] [INFO] [table_detector.py:558]: Rejecting merge: hierarchy mismatch on 'season' ('high' vs 'low')
+[2026-07-16 10:48:43] [INFO] [table_detector.py:211]: Successfully repaired truncated JSON (trimmed 132 chars).
+[2026-07-16 10:48:43] [INFO] [table_detector.py:211]: Successfully repaired truncated JSON (trimmed 72 chars).
+[2026-07-16 10:48:43] [INFO] [table_detector.py:546]: Rejecting merge: hierarchy mismatch on 'season' ('high' vs 'low')
+[2026-07-16 10:48:43] [INFO] [table_detector.py:609]: Rejecting merge of 'rates' and 'rates' due to hierarchy mismatch
+[2026-07-16 10:48:43] [INFO] [table_detector.py:612]: Merging consecutive tables: 'rates' and 'rates'
+[2026-07-16 10:48:43] [INFO] [table_detector.py:546]: Rejecting merge: hierarchy mismatch on 'season' ('high' vs 'low')
+[2026-07-16 10:52:09] [INFO] [table_detector.py:184]: Repaired truncated JSON at pos 118, preserving data.
+[2026-07-16 10:52:09] [INFO] [table_detector.py:184]: Repaired truncated JSON at pos 81, preserving data.
+[2026-07-16 10:52:09] [INFO] [table_detector.py:512]: Rejecting merge: hierarchy mismatch on 'season' ('high' vs 'low')
+[2026-07-16 10:52:09] [INFO] [table_detector.py:575]: Rejecting merge of 'rates' and 'rates' due to hierarchy mismatch
+[2026-07-16 10:52:09] [INFO] [table_detector.py:578]: Merging consecutive tables: 'rates' and 'rates'
+[2026-07-16 10:52:09] [INFO] [table_detector.py:512]: Rejecting merge: hierarchy mismatch on 'season' ('high' vs 'low')
+[2026-07-16 10:52:09] [INFO] [table_detector.py:476]: Removing repeated header row: {'a': 'DATES', 'b': 'Cliffside Ocean Front', 'c': 'Romance Deluxe Ocean Front'}
+[2026-07-16 10:52:09] [INFO] [table_detector.py:578]: Merging consecutive tables: 'rates_page_1' and 'rates_page_2'
+[2026-07-16 10:52:09] [INFO] [table_detector.py:578]: Merging consecutive tables: 'policy_page_1' and 'policy_page_2'
+[2026-07-16 10:52:21] [INFO] [table_detector.py:184]: Repaired truncated JSON at pos 118, preserving data.
+[2026-07-16 10:52:21] [INFO] [table_detector.py:184]: Repaired truncated JSON at pos 81, preserving data.
+[2026-07-16 10:52:21] [INFO] [table_detector.py:512]: Rejecting merge: hierarchy mismatch on 'season' ('high' vs 'low')
+[2026-07-16 10:52:21] [INFO] [table_detector.py:575]: Rejecting merge of 'rates' and 'rates' due to hierarchy mismatch
+[2026-07-16 10:52:21] [INFO] [table_detector.py:578]: Merging consecutive tables: 'rates' and 'rates'
+[2026-07-16 10:52:21] [INFO] [table_detector.py:512]: Rejecting merge: hierarchy mismatch on 'season' ('high' vs 'low')
+[2026-07-16 10:52:22] [INFO] [table_detector.py:476]: Removing repeated header row: {'a': 'DATES', 'b': 'Cliffside Ocean Front', 'c': 'Romance Deluxe Ocean Front'}
+[2026-07-16 10:52:22] [INFO] [table_detector.py:578]: Merging consecutive tables: 'rates_page_1' and 'rates_page_2'
+[2026-07-16 10:52:22] [INFO] [table_detector.py:578]: Merging consecutive tables: 'policy_page_1' and 'policy_page_2'

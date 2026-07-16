@@ -84,7 +84,7 @@ def process_pdf(
         logger.info("Matched static reference grids. Skipping LLM extraction.")
         if progress_callback:
             progress_callback(95, 100, "Reference match found! Loading predefined sheets...")
-        excel_bytes = build_excel_workbook(ref_groups)
+        excel_bytes = build_excel_workbook(ref_groups, raw_pdf_text)
         if progress_callback:
             progress_callback(100, 100, "Success!")
         return excel_bytes, ref_groups, []
@@ -172,7 +172,7 @@ def process_pdf(
             logger.info("Extraction validation passed successfully!")
             if progress_callback:
                 progress_callback(98, 100, "Generating styled Excel workbook...")
-            excel_bytes = build_excel_workbook(groups)
+            excel_bytes = build_excel_workbook(groups, raw_pdf_text)
             if progress_callback:
                 progress_callback(100, 100, "Success!")
             return excel_bytes, groups, validation_msgs
@@ -181,7 +181,7 @@ def process_pdf(
             attempt += 1
             if attempt > max_retries:
                 logger.error("All extraction retries exhausted. Exporting best-effort data.")
-                excel_bytes = build_excel_workbook(groups)
+                excel_bytes = build_excel_workbook(groups, raw_pdf_text)
                 return excel_bytes, groups, validation_msgs + [
                     "CRITICAL: Failed to validate data structure after 3 attempts. "
                     "Table schema may contain gaps."

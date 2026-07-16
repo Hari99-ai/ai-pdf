@@ -317,6 +317,18 @@ def build_sources_from_detected_sections(sections: list[dict], raw_text: str) ->
         elif section_type == "list" and rows:
             sources.append((sheet_title, rows))
 
+    # Append raw PDF text as a tabulated sheet
+    if raw_text and raw_text.strip():
+        try:
+            from pdf_extractor.excel_generator import tabulate_raw_text
+            raw_headers, raw_rows = tabulate_raw_text(raw_text)
+            if raw_rows:
+                sources.append(("Raw PDF Text", raw_rows))
+            else:
+                sources.append(("Raw PDF Text", split_text_for_excel(raw_text)))
+        except ImportError:
+            sources.append(("Raw PDF Text", split_text_for_excel(raw_text)))
+
     return sources
 
 
