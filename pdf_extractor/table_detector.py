@@ -11,24 +11,23 @@ from pdf_extractor.ocr_engine import encode_image_to_base64
 # LLM Extraction Prompts
 # ---------------------------------------------------------------------------
 
-DETECTION_PROMPT = """You are a table extraction engine for hotel/travel contract PDFs. Your ONLY job is to find every table on this page and extract it exactly as structured data.
+DETECTION_PROMPT = """You are an expert data analyst and extraction engine for hotel/travel contract PDFs. Your job is to extract all tables, grids, list items, key-value configurations, policies, and property metadata from this page as structured sections.
 
-CRITICAL: Detect every single table, grid, matrix, rate sheet, schedule, price list, fee schedule, comparison chart, and any data arranged in rows and columns — even if it has no visible borders. If data is aligned in columns, treat it as a table.
+CRITICAL:
+1. Detect every single table, grid, matrix, rate sheet, schedule, price list, fee schedule, comparison chart, and any data arranged in rows and columns.
+2. If the page contains unstructured information (such as Property Name, Address, Contact details, Validity dates, Currency, Tax rates, Booking policies, Cancellation clauses, etc.), you MUST also extract them as structured "key_value" or "list" sections. Do NOT ignore them.
 
 Output Schema:
 {
   "sections": [
     {
-      "name": "descriptive_table_name_in_snake_case",
-      "type": "table",
-      "headers": ["column_1", "column_2", "column_3", "context"],
+      "name": "descriptive_section_name_in_snake_case",
+      "type": "table", // Use "table", "key_value", or "list"
+      "headers": ["column_1", "column_2", "context"], // Required ONLY if type is "table". Merge multi-word headers and preserve column order.
       "rows": [
-        {
-          "column_1": "value_1",
-          "column_2": "value_2",
-          "column_3": "value_3",
-          "context": "Brief explanation of what this row represents"
-        }
+        // For type "table", this is a list of dicts (one per row), e.g., [{"col_1": "val_1", "col_2": "val_2", "context": "..."}]
+        // For type "key_value", this is a single dict of key-value pairs, e.g., {"property_name": "Ocean Breeze Resort", "currency": "INR"}
+        // For type "list", this is a list of strings, e.g., ["Free cancellation up to 7 days before check-in.", "Breakfast included."]
       ]
     }
   ]
@@ -50,39 +49,36 @@ When a table has multiple fee/charge items, each row MUST be self-contained with
 - If a rate applies to multiple room types, create a separate row for EACH room type with the rate repeated.
 
 General Rules:
-1. EVERY table on the page must be a separate section with type "table".
-2. Preserve ALL data exactly — do NOT round numbers, convert currencies, translate text, or change decimal places.
-3. For tables: merge multi-word column names into a single key. Merge wrapped header lines into one string. Preserve original column order and row order.
-4. Include ALL rows, even if they look like subtotals, totals, notes, or continuation rows.
-5. If a table spans this page, include only what is visible on THIS page (merging across pages happens later).
-6. If NO table exists on this page, return {"sections": []}.
-7. Return ONLY valid JSON. No markdown fences, no explanations, no preamble.
-8. IMPORTANT: Every row MUST include a "context" field with a brief, one-line explanation of what the row data means (e.g., "Rate per night for oceanfront room", "Seasonal pricing for holiday period", "Extra person charge"). This helps users understand the data at a glance.
+1. Every table, key-value block, or list block must be a separate section with the correct type.
+2. Preserve ALL data exactly — do NOT round numbers, convert currencies, translate text, or change decimal places. Keep dates, prices, phone numbers, and percentage values (like tax or commission rates) exactly as written.
+3. Every row in type "table" must include a "context" field explaining the row data.
+4. If no relevant information of any kind exists on this page, return {"sections": []}.
+5. Return ONLY valid JSON. No markdown fences, no explanations, no preamble.
 """
 
-DETECTION_PROMPT_WITH_CONTEXT = """You are a table extraction engine processing a multi-page hotel/travel contract document sequentially. You are currently viewing PAGE {current_page} of {total_pages}.
+DETECTION_PROMPT_WITH_CONTEXT = """You are an expert data analyst and extraction engine processing a multi-page hotel/travel contract document sequentially. You are currently viewing PAGE {current_page} of {total_pages}.
 
 You have already extracted data from previous pages. Here is a summary of what was found so far:
 {previous_context}
 
-CRITICAL: Detect every single table, grid, matrix, rate sheet, schedule, price list, fee schedule, comparison chart, and any data arranged in rows and columns — even if it has no visible borders. If data is aligned in columns, treat it as a table.
+Your job is to extract all tables, grids, list items, key-value configurations, policies, and property metadata from this page as structured sections.
 
-IMPORTANT: If this page continues a table from a previous page, use the same section name and headers to enable proper merging. For example, if "rates_grid" was started on page 1 and continues on page 2, use the same name "rates_grid" and matching headers.
+CRITICAL:
+1. Detect every single table, grid, matrix, rate sheet, schedule, price list, fee schedule, comparison chart, and any data arranged in rows and columns.
+2. If the page contains unstructured information (such as Property Name, Address, Contact details, Validity dates, Currency, Tax rates, Booking policies, cancellation clauses, etc.), you MUST also extract them as structured "key_value" or "list" sections. Do NOT ignore them.
+3. If this page continues a table from a previous page, use the same section name and headers to enable proper merging. For example, if "rates_grid" was started on page 1 and continues on page 2, use the same name "rates_grid" and matching headers.
 
 Output Schema:
 {
   "sections": [
     {
-      "name": "descriptive_table_name_in_snake_case",
-      "type": "table",
-      "headers": ["column_1", "column_2", "column_3", "context"],
+      "name": "descriptive_section_name_in_snake_case",
+      "type": "table", // Use "table", "key_value", or "list"
+      "headers": ["column_1", "column_2", "context"], // Required ONLY if type is "table". Merge multi-word headers and preserve column order.
       "rows": [
-        {
-          "column_1": "value_1",
-          "column_2": "value_2",
-          "column_3": "value_3",
-          "context": "Brief explanation of what this row represents"
-        }
+        // For type "table", this is a list of dicts (one per row), e.g., [{"col_1": "val_1", "col_2": "val_2", "context": "..."}]
+        // For type "key_value", this is a single dict of key-value pairs, e.g., {"property_name": "Ocean Breeze Resort", "currency": "INR"}
+        // For type "list", this is a list of strings, e.g., ["Free cancellation up to 7 days before check-in.", "Breakfast included."]
       ]
     }
   ]
@@ -102,15 +98,12 @@ ROW ALIGNMENT RULES (critical for "Other Charges" and fee tables):
 When a table has multiple fee/charge items, each row MUST be self-contained with ALL columns filled. If a row's column is empty because the value was stated once in a merged cell above, REPEAT the value in every row.
 
 General Rules:
-1. EVERY table on the page must be a separate section with type "table".
-2. Preserve ALL data exactly — do NOT round numbers, convert currencies, translate text, or change decimal places.
-3. For tables: merge multi-word column names into a single key. Merge wrapped header lines into one string. Preserve original column order and row order.
-4. Include ALL rows, even if they look like subtotals, totals, notes, or continuation rows.
-5. If a table spans this page, include only what is visible on THIS page (merging across pages happens later).
-6. If NO table exists on this page, return {"sections": []}.
-7. Return ONLY valid JSON. No markdown fences, no explanations, no preamble.
-8. IMPORTANT: Every row MUST include a "context" field with a brief, one-line explanation of what the row data means.
-9. Use the previous context to maintain consistency in naming, headers, and data formatting across pages.
+1. Every table, key-value block, or list block must be a separate section with the correct type.
+2. Preserve ALL data exactly — do NOT round numbers, convert currencies, translate text, or change decimal places. Keep dates, prices, phone numbers, and percentage values (like tax or commission rates) exactly as written.
+3. Every row in type "table" must include a "context" field explaining the row data.
+4. If no relevant information of any kind exists on this page, return {"sections": []}.
+5. Return ONLY valid JSON. No markdown fences, no explanations, no preamble.
+6. Use the previous context to maintain consistency in naming, headers, and data formatting across pages.
 """
 
 

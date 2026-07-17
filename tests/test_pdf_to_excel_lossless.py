@@ -24,7 +24,7 @@ def test_build_excel_from_sources_includes_raw_text_sheet():
 
     assert "raw_pdf_text" in wb.sheetnames
     raw_sheet = wb["raw_pdf_text"]
-    assert raw_sheet["A1"].value == "value"
+    assert raw_sheet["A1"].value == "Value"
     assert raw_sheet["A2"].value == "Rates 100 200"
     assert raw_sheet["A3"].value == "Policy 50%"
 

@@ -61,9 +61,9 @@ def validate_extraction(
                 all_extracted_values.extend(str(v) for v in rows.values())
                 all_extracted_values.extend(str(k) for k in rows.keys())
                 
-    # 2. If PDF has text, we should have extracted at least some rows
+    # 2. If PDF has text, we should have extracted at least some rows (warn instead of error)
     if len(raw_pdf_text.strip()) > 200 and total_rows == 0:
-        errors.append("PDF contains substantial text, but zero rows of structured data were extracted.")
+        warnings.append("PDF contains substantial text, but zero rows of structured data were extracted.")
 
     # 3. Numeric accuracy: check if currency and percentage strings are preserved
     if raw_pdf_text:

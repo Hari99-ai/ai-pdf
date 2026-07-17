@@ -1157,10 +1157,19 @@ def extract_numbers_from_text(text: str) -> set[str]:
     return set(re.findall(r"\d+\.?\d*", text))
 
 
+MONTH_TO_NUM = {
+    "jan": "1", "feb": "2", "mar": "3", "apr": "4",
+    "may": "5", "jun": "6", "jul": "7", "aug": "8",
+    "sep": "9", "oct": "10", "nov": "11", "dec": "12",
+}
+
+
 def extract_months_from_text(text: str) -> set[str]:
     months = set()
     for m in re.findall(r"(?i)\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*", text):
         months.add(m.lower()[:3])
+        months.add(MONTH_TO_NUM.get(m.lower()[:3], ""))
+    months.discard("")
     return months
 
 
@@ -1232,7 +1241,12 @@ def validate_extraction(pdf_info: dict, excel_info: dict, extracted_json) -> dic
             if len(n) >= 2:
                 date_nums.add(n)
         for m in re.findall(r"(?i)\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*", date_str):
-            date_months.add(m.lower()[:3])
+            m3 = m.lower()[:3]
+            date_months.add(m3)
+            date_months.add(MONTH_TO_NUM.get(m3, ""))
+
+    date_nums.discard("")
+    date_months.discard("")
 
     matched_date_nums = sum(1 for n in date_nums if n in json_numbers)
     matched_date_months = sum(1 for m in date_months if m in json_months)
@@ -1255,13 +1269,28 @@ def validate_extraction(pdf_info: dict, excel_info: dict, extracted_json) -> dic
                 room_nums.add(word)
 
     pct_nums = set()
+    pct_floats = set()
     for pct in pdf_info["percentages"]:
         num = re.sub(r"[^\d.]", "", pct)
         if num:
             pct_nums.add(num)
+            try:
+                pct_floats.add(str(float(num)))
+            except ValueError:
+                pass
 
-    matched_pct = sum(1 for n in pct_nums if n in json_numbers)
-    missing_pct = [n for n in pct_nums if n not in json_numbers]
+    json_floats = set()
+    for n in json_numbers:
+        try:
+            val = float(n)
+            if 0 < val <= 1:
+                json_floats.add(str(val * 100))
+            json_floats.add(str(val))
+        except ValueError:
+            pass
+
+    matched_pct = sum(1 for n in pct_nums if n in json_numbers or n in json_floats)
+    missing_pct = [n for n in pct_nums if n not in json_numbers and n not in json_floats]
     if missing_pct:
         checks.append(("percentages", ", ".join(missing_pct)))
 
