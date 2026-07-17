@@ -317,18 +317,6 @@ def build_sources_from_detected_sections(sections: list[dict], raw_text: str) ->
         elif section_type == "list" and rows:
             sources.append((sheet_title, rows))
 
-    # Append raw PDF text as a tabulated sheet
-    if raw_text and raw_text.strip():
-        try:
-            from pdf_extractor.excel_generator import tabulate_raw_text
-            raw_headers, raw_rows = tabulate_raw_text(raw_text)
-            if raw_rows:
-                sources.append(("Raw PDF Text", raw_rows))
-            else:
-                sources.append(("Raw PDF Text", split_text_for_excel(raw_text)))
-        except ImportError:
-            sources.append(("Raw PDF Text", split_text_for_excel(raw_text)))
-
     return sources
 
 
@@ -1084,7 +1072,6 @@ def analyze_excel(excel_bytes: bytes) -> dict:
         "dates": [],
         "text_values": [],
         "sheets": {},
-        "has_raw_text_sheet": False,
     }
 
     if load_workbook is None:
@@ -1093,7 +1080,6 @@ def analyze_excel(excel_bytes: bytes) -> dict:
     wb = load_workbook(io.BytesIO(excel_bytes))
     info["sheet_count"] = len(wb.sheetnames)
     info["sheet_names"] = list(wb.sheetnames)
-    info["has_raw_text_sheet"] = any(name == "raw_pdf_text" for name in wb.sheetnames)
 
     for sheet_name in wb.sheetnames:
         ws = wb[sheet_name]
@@ -1195,12 +1181,6 @@ def validate_extraction(pdf_info: dict, excel_info: dict, extracted_json) -> dic
         "data_loss_pct": 0.0,
         "status": "PASS",
     }
-
-    if excel_info.get("has_raw_text_sheet"):
-        report["accuracy_pct"] = 100.0
-        report["data_loss_pct"] = 0.0
-        report["status"] = "PASS"
-        return report
 
     if isinstance(extracted_json, list) and extracted_json and isinstance(extracted_json[0], dict) and "rows" in extracted_json[0]:
         total_table_rows = sum(len(s.get("rows", [])) for s in extracted_json if isinstance(s, dict))
@@ -1734,7 +1714,7 @@ def build_zip_of_excels(files: list[tuple[str, bytes]]) -> bytes:
 def build_analyst_workbook_sources(analysis: dict, raw_text: str) -> list[tuple[str, object]]:
     """Flatten the model output into workbook-friendly sheet sources."""
     if not isinstance(analysis, dict):
-        return [("raw_pdf_text", split_text_for_excel(raw_text))]
+        return []
 
     sources: list[tuple[str, object]] = []
     has_structured_output = False
@@ -1764,8 +1744,6 @@ def build_analyst_workbook_sources(analysis: dict, raw_text: str) -> list[tuple[
         sources.append(("executive_summary", summary))
         has_structured_output = True
 
-    if not has_structured_output:
-        sources.append(("raw_pdf_text", split_text_for_excel(raw_text)))
     return sources
 
 
